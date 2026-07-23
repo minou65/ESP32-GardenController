@@ -1,12 +1,11 @@
-// html.h
 
 #ifndef _HTML_h
 #define _HTML_h
 
 #if defined(ARDUINO) && ARDUINO >= 100
-	#include "arduino.h"
+#include "arduino.h"
 #else
-	#include "WProgram.h"
+#include "WProgram.h"
 #endif
 
 const char html_output_styles[] PROGMEM = R"====(
@@ -53,36 +52,102 @@ const char html_end_template[] PROGMEM = R"=====(
 )=====";
 
 const char html_script[] PROGMEM = R"=====(
-requestDateTime();
-setInterval(requestDateTime, 1000);
+// Initialize time synchronization
+let timeOffset = 0;
+initializeTime();
 
-function requestDateTime() { 
+function initializeTime() {
    var xhttp = new XMLHttpRequest();
    xhttp.onreadystatechange = function() {
        if (this.readyState == 4 && this.status == 200) {
-           document.getElementById('DateTimeValue').innerHTML = this.responseText;
+           // Parse "YYYY-MM-DD HH:MM:SS" format
+           let serverTimeStr = this.responseText.trim();
+           let serverTime = new Date(serverTimeStr.replace(' ', 'T'));
+           let clientTime = new Date();
+           timeOffset = serverTime.getTime() - clientTime.getTime();
+           updateDateTime();
+           setInterval(updateDateTime, 1000);
        }
    };
    xhttp.open('GET', 'DateTime', true);
    xhttp.send(); 
 }
 
+function updateDateTime() {
+    let now = new Date(Date.now() + timeOffset);
+    // Format as HH:MM:SS
+    let timeStr = now.toLocaleTimeString('de-DE', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+    });
+    document.getElementById('DateTimeValue').innerHTML = timeStr;
+}
+
+// Re-sync every 10 minutes to prevent drift
+setInterval(initializeTime, 600000);
+
+// Initial data request and periodic updates every 10 seconds
+requestData();
+setInterval(requestData, 10000);
+
+function requestData() {
+   fetch('/data')
+   .then(response => response.json())
+   .then(data => updateData(data))
+   .catch(error => console.error('Error fetching data:', error));
+}
+
 function updateData(jsonData) {
     document.getElementById('RSSIValue').innerHTML = jsonData.RSSI;
 
-    for (let i = 1; i <= 8; i++) {
-        let status = jsonData['Zone' + i + 'Status'];
-        let statusSpan = document.getElementById('Zone' + i + 'Status');
-
-        if (statusSpan) {
-            statusSpan.textContent = status;
+    // Update valve status display
+    if (jsonData.valve) {
+        for (let i = 1; i <= 8; i++) {
+            let valveStatus = jsonData.valve['zone' + i];
+            let statusSpan = document.getElementById('Zone' + i + 'Status');
+            
+            if (statusSpan && valveStatus) {
+                statusSpan.textContent = valveStatus;
+            }
         }
     }
 
-    let soilMoistureSpan = document.getElementById('SoilMoisturePercent');
-    if (soilMoistureSpan && jsonData['SoilMoisturePercent']) {
-        soilMoistureSpan.textContent = jsonData['SoilMoisturePercent'];
+    // Update button states
+    if (jsonData.button) {
+        for (let i = 1; i <= 8; i++) {
+            let buttonState = jsonData.button['zone' + i];
+            if (buttonState) {
+                setOutputButtonState(String(i), buttonState);
+            }
+        }
     }
+
+    // Update moisture sensors
+    if (jsonData.moisture) {
+        for (let i = 1; i <= 2; i++) {
+            let moistureValue = jsonData.moisture['sensor' + i];
+            let moistureSpan = document.getElementById('SoilMoisture' + i + 'Percent');
+            
+            if (moistureSpan && moistureValue !== null) {
+                moistureSpan.textContent = moistureValue + '%';
+            }
+        }
+    }
+}
+
+function setOutputButtonState(ch, state) {
+  let group = document.getElementById(ch + 'Btns');
+  if (group) {
+    group.querySelectorAll('.output-btn').forEach(btn => {
+      if (btn.getAttribute('data-state') === state) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+  }
 }
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -100,57 +165,26 @@ document.addEventListener('DOMContentLoaded', function() {
         if (ch === '1') param = 'ch1=' + state;
         else if (ch === '2') param = 'ch2=' + state;
         else if (ch === '3') param = 'ch3=' + state;
-else if (ch === '4') param = 'ch4=' + state;
-else if (ch === '5') param = 'ch5=' + state;
-else if (ch === '6') param = 'ch6=' + state;
-else if (ch === '7') param = 'ch7=' + state;
-else if (ch === '8') param = 'ch8=' + state;
+        else if (ch === '4') param = 'ch4=' + state;
+        else if (ch === '5') param = 'ch5=' + state;
+        else if (ch === '6') param = 'ch6=' + state;
+        else if (ch === '7') param = 'ch7=' + state;
+        else if (ch === '8') param = 'ch8=' + state;
         fetch('/post', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: param
         }).then(response => {
-          if (response.ok) requestData();
+          if (response.ok) {
+            requestData();
+          }
+        }).catch(error => {
+          console.error('Error posting data:', error);
         });
       });
     });
   });
-
-  //// Helligkeitsfelder: POST bei Änderung, nur wenn ON
-  //for (let i = 1; i <= 3; i++) {
-  //  let input = document.getElementById('brightnessCh' + i);
-  //  let onBtn = document.querySelector('#Channel' + i + 'Btns .output-btn.on');
-  //  if (input) {
-  //    input.addEventListener('change', function() {
-  //      if (onBtn && onBtn.classList.contains('active')) {
-  //        let val = input.value;
-  //        if (val < 0) val = 0;
-  //        if (val > 100) val = 100;
-  //        let data = 'ch' + i + '=on&brightnessCh' + i + '=' + val;
-  //        fetch('/post', {
-  //          method: 'POST',
-  //          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-  //          body: data
-  //        });
-  //      }
-  //    });
-  //  }
-  //}
 });
-
-function setOutputButtonState(ch, state) {
-  let group = document.getElementById(ch + 'Btns');
-  if (group) {
-    group.querySelectorAll('.output-btn').forEach(btn => {
-      if (btn.getAttribute('data-state') === state) {
-        btn.classList.add('active');
-      } else {
-        btn.classList.remove('active');
-      }
-    });
-  }
-}
 )=====";
 
 #endif
-
