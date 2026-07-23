@@ -11,7 +11,7 @@
 #include <DNSServer.h>
 
 #include <IotWebConfAsyncUpdateServer.h>
-#include <IotWebConfAsync.h>
+#include <IotWebConfAsyncTab.h>
 #include <IotWebRoot.h>
 #include <Preferences.h>
 
@@ -30,7 +30,7 @@ extern char Version[];
 // -- Status indicator pin.
 //      First it will light up (kept LOW), on Wifi connection it will blink,
 //      when connected to the Wifi it will turn off (kept HIGH).
-#define STATUS_PIN LED_BUILTIN
+#define STATUS_PIN GPIO_NUM_23
 #define ON_LEVEL HIGH
 
 // -- Initial name of the Thing. Used e.g. as SSID of the own Access Point.
@@ -43,21 +43,14 @@ AsyncUpdateServer AsyncUpdater;
 
 NtpConfig ntpConfig = NtpConfig();
 
-AsyncIotWebConf iotWebConf(thingName, &dnsServer, &asyncWebServerWrapper, wifiInitialApPassword, CONFIG_VERSION);
+AsyncIotWebConfTab iotWebConf(thingName, &dnsServer, &asyncWebServerWrapper, wifiInitialApPassword, CONFIG_VERSION);
 
-OutputStatus outputStatus[MAX_SCHEDULERS]{
-    OUTPUT_OFF,
-    OUTPUT_OFF,
-    OUTPUT_OFF,
-    OUTPUT_OFF,
-    OUTPUT_OFF,
-    OUTPUT_OFF,
-    OUTPUT_OFF,
-    OUTPUT_OFF
-};
+OutputStatus outputStatus[MAX_SCHEDULERS]{};
+unsigned long manualOnTimestamp[MAX_SCHEDULERS] = {};
 
 bool ShouldReboot = false;
 bool ConfigChanged = false;
+bool updateOutputs = false;
 
 extern const int RELAY_PINS[];
 
@@ -75,18 +68,23 @@ iotwebconf::WifiAuthInfo* handleConnectWifiFailure();
 void handleWificonnected();
 void handleWebSerialCommand(const String& command);
 void handleOnProgress(size_t prg, size_t sz);
+void handleReboot(AsyncWebServerRequest* request);
 
-class CustomHtmlFormatProvider : public iotwebconf::OptionalGroupHtmlFormatProvider {
+class CustomHtmlFormatProvider : public AsyncTabHtmlFormatProvider {
+public:
+    CustomHtmlFormatProvider(std::vector<AsyncTabInfo>* tabs, int minWidth = 500, int maxWidth = 600)
+        : AsyncTabHtmlFormatProvider(tabs, minWidth, maxWidth) {
+    }
+
 protected:
     String getFormEnd() override {
-        return OptionalGroupHtmlFormatProvider::getFormEnd() + String(FPSTR(html_form_end));
+        return AsyncTabHtmlFormatProvider::getFormEnd() + String(FPSTR(html_form_end));
     }
     String getEnd() override {
-        return String(FPSTR(html_end_template)) + HtmlFormatProvider::getEnd();
-
+        return String(FPSTR(html_end_template)) + AsyncTabHtmlFormatProvider::getEnd();
     }
 };
-CustomHtmlFormatProvider customHtmlFormatProvider;
+CustomHtmlFormatProvider* customHtmlFormatProvider = nullptr;
 
 class MyHtmlRootFormatProvider : public HtmlRootFormatProvider {
 public:
@@ -104,7 +102,6 @@ public:
         html_ += "<button class='output-btn on" + String(status == OUTPUT_ON ? " active" : "") + "' data-ch='" + id + "' data-state='on'>On</button>";
         html_ += "<button class='output-btn off" + String(status == OUTPUT_OFF ? " active" : "") + "' data-ch='" + id + "' data-state='off'>Off</button>";
         html_ += "<button class='output-btn auto" + String(status == OUTPUT_AUTO ? " active" : "") + "' data-ch='" + id + "' data-state='auto'>Auto</button>";
-        // BRIGHTNESS-FELD KOMPLETT ENTFERNT FÜR GARDENA CONTROLLER!
         html_ += "</div></td></tr>";
         return html_;
     }
@@ -119,7 +116,7 @@ protected:
     String getScriptInner() override {
         String s_ = HtmlRootFormatProvider::getScriptInner();
 
-        s_.replace("{millisecond}", "5000");
+        s_.replace("{millisecond}", "10000");
         s_ += String(FPSTR(html_script));
         return s_;
     }
@@ -140,16 +137,26 @@ void saveOutputStatus() {
 
 void loadOutputStatus() {
     Preferences pref_;
+	bool shouldsave_ = false;
     pref_.begin("outputStatus", true);
 
     for (int i_ = 0; i_ < MAX_SCHEDULERS; i_++) {
         String key_ = "ch" + String(i_ + 1);
         if (pref_.isKey(key_.c_str())) {
             outputStatus[i_] = static_cast<OutputStatus>(pref_.getUChar(key_.c_str(), static_cast<uint8_t>(OUTPUT_AUTO)));
+            if (outputStatus[i_] == OUTPUT_ON) {
+				outputStatus[i_] = OUTPUT_AUTO; // Reset to AUTO on load to avoid unintended manual ON state
+				shouldsave_ = true;
+			}
         }
     }
 
     pref_.end();
+
+    if (shouldsave_) {
+        saveOutputStatus(); // Save the reset state back to preferences
+	}
+
 	Serial.println(F("Output status loaded from preferences."));
 }
 
@@ -161,14 +168,24 @@ void setupWebServer() {
     iotWebConf.setStatusPin(STATUS_PIN, ON_LEVEL);
     iotWebConf.setConfigPin(CONFIG_PIN);
     
-    iotWebConf.setHtmlFormatProvider(&customHtmlFormatProvider);
+    iotWebConf.setSystemTabName("System");
+    iotWebConf.setSystemTabPosition(-1);
 
-    iotWebConf.addParameterGroup(&ntpConfig);
-    iotWebConf.addParameterGroup(&soilMoistureSensor);
+    iotWebConf.addParameterGroup(&ntpConfig, "System");
 
+    // Schedulers zu einem eigenen Tab
     for (int i_ = 0; i_ < MAX_SCHEDULERS; ++i_) {
-        iotWebConf.addParameterGroup(&schedulers[i_]);
+        iotWebConf.addParameterGroup(&schedulers[i_], "Schedulers");
     }
+
+    // Soil Moisture Sensors zu einem eigenen Tab
+    for (int i_ = 0; i_ < MAX_SOIL_SENSORS; i_++) {
+        iotWebConf.addParameterGroup(&soilMoistureSensors[i_], "Sensors");
+    }
+
+    auto customProvider = new CustomHtmlFormatProvider(iotWebConf.getTabsVector());
+	customProvider->setContainerWidth(700, 700); // Set a fixed width for the configuration portal
+    iotWebConf.setHtmlFormatProvider(customProvider);
 
     iotWebConf.getApTimeoutParameter()->visible = true;
 
@@ -184,39 +201,43 @@ void setupWebServer() {
 
     iotWebConf.init();
 
+    iotWebConf.setupUpdateServer(
+        [](const char* updatePath) { AsyncUpdater.setup(&server, updatePath, handleOnProgress); },
+        [](const char* userName, char* password) { AsyncUpdater.updateCredentials(userName, password); 
+        }
+    );
+
     server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
         handleRoot(request);
         }
     );
+
     server.on("/config", HTTP_ANY, [](AsyncWebServerRequest* request) {
         auto* asyncWebRequestWrapper_ = new AsyncWebRequestWrapper(request);
         iotWebConf.handleConfig(asyncWebRequestWrapper_);
         }
     );
+
     server.on("/reboot", HTTP_GET, [](AsyncWebServerRequest* request) {
-        AsyncWebServerResponse* response_ = request->beginResponse(200, "text/html",
-            "<html>"
-            "<head>"
-            "<meta http-equiv=\"refresh\" content=\"15; url=/\">"
-            "<title>Rebooting...</title>"
-            "</head>"
-            "<body>"
-            "Please wait while the device is rebooting...<br>"
-            "You will be redirected to the homepage shortly."
-            "</body>"
-            "</html>");
-        request->client()->setNoDelay(true); // Disable Nagle's algorithm so the client gets the response immediately
-        request->send(response_);
-        ShouldReboot = true;
+		handleReboot(request);
         }
     );
 
-    server.on("/DateTime", HTTP_GET, [](AsyncWebServerRequest* request) { handleDateTime(request); });
-    server.on("/data", HTTP_GET, [](AsyncWebServerRequest* request) { handleData(request); });
+    server.on("/DateTime", HTTP_GET, [](AsyncWebServerRequest* request) { 
+        handleDateTime(request); 
+        }
+    );
+    
+    server.on("/data", HTTP_GET, [](AsyncWebServerRequest* request) { 
+        handleData(request); 
+        }
+    );
+
     server.on("/post", HTTP_ANY, [](AsyncWebServerRequest* request) {
         handlePost(request);
         }
     );
+
     server.onNotFound([](AsyncWebServerRequest* request) {
         AsyncWebRequestWrapper asyncWebRequestWrapper_(request);
         iotWebConf.handleNotFound(&asyncWebRequestWrapper_);
@@ -227,6 +248,10 @@ void setupWebServer() {
 
 void loopWebServer() {
     iotWebConf.doLoop();
+
+    if (!ShouldReboot) {
+        ShouldReboot = AsyncUpdater.isFinished();
+    }
 }
 
 
@@ -258,17 +283,30 @@ void handleRoot(AsyncWebServerRequest* request) {
     response_ += fp_.getHtmlTableEnd();
     response_ += fp_.getHtmlFieldsetEnd();
 
-	// Bodenfeuchte-Sensoren
-    if (soilMoistureSensor.isEnabled()) {
+    // Bodenfeuchte-Sensoren
+// Bodenfeuchte-Sensoren - alle in einem Rahmen
+    bool hasAnySensor = false;
+    for (int i = 0; i < MAX_SOIL_SENSORS; i++) {
+        if (soilMoistureSensors[i].isEnabled()) {
+            hasAnySensor = true;
+            break;
+        }
+    }
+
+    if (hasAnySensor) {
         response_ += F("<fieldset align=left style=\"border: 1px solid\">\n");
-        response_ += F("<legend>Soil Moisture Sensor</legend>\n");
+        response_ += F("<legend>Soil Moisture Sensors</legend>\n");
         response_ += F("<table border=\"0\" align=\"center\" width=\"100%\">\n");
 
-        String sensorName = String(soilMoistureSensor.getName());
-        if (sensorName.length() == 0) {
-            sensorName = "Soil Sensor";
+        for (int i = 0; i < MAX_SOIL_SENSORS; i++) {
+            if (soilMoistureSensors[i].isEnabled()) {
+                String sensorName = String(soilMoistureSensors[i].getName());
+                if (sensorName.length() == 0) {
+                    sensorName = "Soil Sensor " + String(i + 1);
+                }
+                response_ += fp_.getHtmlTableRowSpan(sensorName, "N/A", "SoilMoisture" + String(i + 1) + "Percent");
+            }
         }
-        response_ += fp_.getHtmlTableRowSpan(sensorName, "N/A", "SoilMoisturePercent");
 
         response_ += fp_.getHtmlTableEnd();
         response_ += fp_.getHtmlFieldsetEnd();
@@ -325,15 +363,15 @@ void handleRoot(AsyncWebServerRequest* request) {
 void handleDateTime(AsyncWebServerRequest* request) {
     ESP_LOGD("handleDateTime", "Time requested");
 
-    // Get the current time
+    // Get the current time as Unix timestamp (milliseconds)
     time_t now_ = time(nullptr);
     struct tm* timeinfo_ = localtime(&now_);
-    char timeStr_[20];
-    char dateStr_[20];
-    strftime(timeStr_, sizeof(timeStr_), "%H:%M:%S", timeinfo_);
-    strftime(dateStr_, sizeof(dateStr_), "%Y-%m-%d", timeinfo_);
 
-    request->send(200, "text/plain", timeStr_);
+    // Send as formatted ISO string: "YYYY-MM-DD HH:MM:SS"
+    char dateTimeStr_[32];
+    strftime(dateTimeStr_, sizeof(dateTimeStr_), "%Y-%m-%d %H:%M:%S", timeinfo_);
+
+    request->send(200, "text/plain", dateTimeStr_);
 }
 
 void handleData(AsyncWebServerRequest* request) {
@@ -341,16 +379,44 @@ void handleData(AsyncWebServerRequest* request) {
     String json_ = "{";
     json_ += "\"RSSI\":\"" + String(WiFi.RSSI()) + "\"";
 
+    // Valve states (actual physical relay state)
+    json_ += ",\"valve\":{";
     for (uint8_t i_ = 0; i_ < MAX_SCHEDULERS; i_++) {
+        if (i_ > 0) json_ += ",";
         int pinState_ = digitalRead(RELAY_PINS[i_]);
-        String status_ = (pinState_ == LOW) ? "ON" : "OFF";
-        json_ += ",\"Zone" + String(i_ + 1) + "Status\":\"" + status_ + "\"";
-	}
+        String status_ = (pinState_ == RELAY_ON) ? "ON" : "OFF";
+        json_ += "\"zone" + String(i_ + 1) + "\":\"" + status_ + "\"";
+    }
+    json_ += "}";
 
-    if (soilMoistureSensor.isEnabled()) {
-        int soilMoisturePercent_ = soilMoistureSensor.getMoisturePercent();
-        json_ += ",\"SoilMoisturePercent\":\"" + String(soilMoisturePercent_) + "\"";
-	}
+    // Button states (on/off/auto mode)
+    json_ += ",\"button\":{";
+    for (uint8_t i_ = 0; i_ < MAX_SCHEDULERS; i_++) {
+        if (i_ > 0) json_ += ",";
+        String buttonState_;
+        switch (outputStatus[i_]) {
+        case OUTPUT_ON:   buttonState_ = "on"; break;
+        case OUTPUT_OFF:  buttonState_ = "off"; break;
+        case OUTPUT_AUTO: buttonState_ = "auto"; break;
+        default:          buttonState_ = "auto"; break;
+        }
+        json_ += "\"zone" + String(i_ + 1) + "\":\"" + buttonState_ + "\"";
+    }
+    json_ += "}";
+
+    // Add soil moisture sensors data
+    json_ += ",\"moisture\":{";
+    for (int i = 0; i < MAX_SOIL_SENSORS; i++) {
+        if (i > 0) json_ += ",";
+        if (soilMoistureSensors[i].isEnabled()) {
+            int soilMoisturePercent_ = soilMoistureSensors[i].getMoisturePercent();
+            json_ += "\"sensor" + String(i + 1) + "\":\"" + String(soilMoisturePercent_) + "\"";
+        }
+        else {
+            json_ += "\"sensor" + String(i + 1) + "\":null";
+        }
+    }
+    json_ += "}";
 
     json_ += "}";
 
@@ -363,7 +429,10 @@ void handlePost(AsyncWebServerRequest* request) {
     if (request->hasParam("reset", true)) {
 
 		ntpConfig.applyDefaultValue();
-		soilMoistureSensor.applyDefaultValue();
+
+        for (int i_ = 0; i_ < MAX_SOIL_SENSORS; i_++) {
+            soilMoistureSensors[i_].applyDefaultValue();
+		}
 
         for (int i_ = 0; i_ < MAX_SCHEDULERS; i_++) {
             schedulers[i_].applyDefaultValue();
@@ -372,7 +441,7 @@ void handlePost(AsyncWebServerRequest* request) {
         Serial.println("Resetting output status to AUTO");
         for (int i_ = 0; i_ < MAX_SCHEDULERS; i_++) {
             outputStatus[i_] = OUTPUT_AUTO;
-            digitalWrite(RELAY_PINS[i_], HIGH); // Set all relays to OFF
+            digitalWrite(RELAY_PINS[i_], RELAY_OFF); // Set all relays to OFF
         }
         saveOutputStatus();
         request->send(200, "text/plain", "Output status reset to AUTO");
@@ -388,27 +457,31 @@ void handlePost(AsyncWebServerRequest* request) {
             Serial.printf("POST parameter: %s = %s\n", name_.c_str(), value_.c_str());
 
             for (int z_ = 1; z_ <= 8; z_++) {
-                if (name_  == "ch" + String(z_)) {
+                if (name_ == "ch" + String(z_)) {
                     int channel_ = z_ - 1;
                     if (value_ == "on") {
-                        digitalWrite(RELAY_PINS[channel_], LOW);
-                        Serial.printf("Zone %d turned ON\n", z_);
-						Serial.printf("Relay pin %d set to LOW\n", RELAY_PINS[channel_]);
-						outputStatus[channel_] = OUTPUT_ON;
+                        digitalWrite(RELAY_PINS[channel_], RELAY_ON);
+                        Serial.printf("Zone %d turned ON manually - 30min timeout started\n", z_);
+                        Serial.printf("Relay pin %d set to RELAY_ON\n", RELAY_PINS[channel_]);
+                        outputStatus[channel_] = OUTPUT_ON;
+                        manualOnTimestamp[channel_] = millis();  // Start timeout timer
                     }
                     else if (value_ == "off") {
-                        digitalWrite(RELAY_PINS[channel_], HIGH);
+                        digitalWrite(RELAY_PINS[channel_], RELAY_OFF);
                         Serial.printf("Zone %d turned OFF\n", z_);
-						Serial.printf("Relay pin %d set to HIGH\n", RELAY_PINS[channel_]);
-						outputStatus[channel_] = OUTPUT_OFF;
+                        Serial.printf("Relay pin %d set to RELAY_OFF\n", RELAY_PINS[channel_]);
+                        outputStatus[channel_] = OUTPUT_OFF;
+                        manualOnTimestamp[channel_] = 0;  // Clear timeout timer
                     }
                     else if (value_ == "auto") {
                         Serial.printf("Zone %d set to AUTO\n", z_);
-						outputStatus[channel_] = OUTPUT_AUTO;
+                        outputStatus[channel_] = OUTPUT_AUTO;
+                        manualOnTimestamp[channel_] = 0;  // Clear timeout timer
                     }
                 }
             }
 			saveOutputStatus();
+			updateOutputs = true;  // Flag to indicate that outputs have changed and need to be updated
         }
     }
 
@@ -484,5 +557,44 @@ void handleOnProgress(size_t prg, size_t sz) {
     if (currentPercent_ % 5 == 0 && currentPercent_ != lastPrinted_) {
         Serial.printf("Progress: %d%%\n", currentPercent_);
         lastPrinted_ = currentPercent_;
+    }
+}
+
+void handleReboot(AsyncWebServerRequest* request) {
+    AsyncWebServerResponse* response_ = request->beginResponse(200, "text/html",
+        "<html>"
+        "<head>"
+        "<meta http-equiv=\"refresh\" content=\"15; url=/\">"
+        "<title>Rebooting...</title>"
+        "</head>"
+        "<body>"
+        "Please wait while the device is rebooting...<br>"
+        "You will be redirected to the homepage shortly."
+        "</body>"
+        "</html>");
+    request->client()->setNoDelay(true); // Disable Nagle's algorithm so the client gets the response immediately
+    request->send(response_);
+    ShouldReboot = true;
+}
+
+void checkManualTimeout() {
+    unsigned long currentMillis = millis();
+
+    for (int i = 0; i < MAX_SCHEDULERS; i++) {
+        // Check if zone is manually ON and timeout has expired
+        if (outputStatus[i] == OUTPUT_ON && manualOnTimestamp[i] > 0) {
+            // Handle millis() overflow
+            unsigned long elapsed = currentMillis - manualOnTimestamp[i];
+
+            if (elapsed >= MANUAL_TIMEOUT_MS) {
+                // Timeout expired - switch to AUTO
+                digitalWrite(RELAY_PINS[i], RELAY_OFF);
+                outputStatus[i] = OUTPUT_AUTO;
+                manualOnTimestamp[i] = 0;
+                saveOutputStatus();
+
+                Serial.printf("Zone %d: 30-minute timeout expired, switched to AUTO\n", i + 1);
+            }
+        }
     }
 }
