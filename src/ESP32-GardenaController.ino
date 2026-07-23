@@ -26,14 +26,17 @@ void setup() {
 	}
 
 	Serial.printf("ESP32 Gardena Controller Version: %s\n", Version);
-	
-	Serial.println("Setting up relays...");
-	for (int i = 0; i < MAX_SCHEDULERS; i++) {
-		pinMode(RELAY_PINS[i], OUTPUT);
-		digitalWrite(RELAY_PINS[i], HIGH); // Alle Relais ausschalten (HIGH = OFF)
+
+	for (int i_ = 0; i_ < MAX_SCHEDULERS; i_++) {
+		pinMode(RELAY_PINS[i_], OUTPUT);
+		digitalWrite(RELAY_PINS[i_], RELAY_OFF);
+		outputStatus[i_] = OUTPUT_AUTO;
+		manualOnTimestamp[i_] = 0;
 	}
 
-	soilMoistureSensor.begin();
+	for (int i_ = 0; i_ < MAX_SOIL_SENSORS; i_++) {
+		soilMoistureSensors[i_].begin();
+	}
 
 	Serial.println("Connecting to WiFi and setting up web server...");
 	setupWebServer();
@@ -58,21 +61,28 @@ void loop() {
 	}
 
 	// Soil moisture measurement every 12 hours
-	if (soilMoistureSensor.shouldMeasure()) {
-		soilMoistureSensor.measureMoisture();
+	for (int i = 0; i < MAX_SOIL_SENSORS; i++) {
+		if (soilMoistureSensors[i].shouldMeasure()) {
+			soilMoistureSensors[i].measureMoisture();
+		}
 	}
 
-	if (schedulerTimer.repeat()) {
+	// Check for manual timeout every loop
+	checkManualTimeout();
+
+	if (schedulerTimer.repeat() || updateOutputs) {
+
+		updateOutputs = false;
 		
 		for (int i_ = 0; i_ < MAX_SCHEDULERS; i_++) {
 			Scheduler& scheduler_ = schedulers[i_];
 			switch(outputStatus[i_]) {
 				case OUTPUT_ON:
-					digitalWrite(RELAY_PINS[i_], LOW);
+					digitalWrite(RELAY_PINS[i_], RELAY_ON);
 					//Serial.printf("Scheduler %s is manually ON\n", scheduler_.getZone());
 					continue;
 				case OUTPUT_OFF:
-					digitalWrite(RELAY_PINS[i_], HIGH);
+					digitalWrite(RELAY_PINS[i_], RELAY_OFF);
 					//Serial.printf("Scheduler %s is manually OFF\n", scheduler_.getZone());
 					continue;
 				case OUTPUT_AUTO:
@@ -80,49 +90,44 @@ void loop() {
 					break;
 			}
 
-			if (soilMoistureSensor.isEnabled()) {
-				int moisturePercent = soilMoistureSensor.getMoisturePercent();
-				if (moisturePercent >= 0) {
-					int threshold = soilMoistureSensor.getThreshold();
-
-					// If moisture is ABOVE threshold, soil is wet enough
-					// -> DON'T water (continue)
-					if (moisturePercent >= threshold) {
-						//Serial.printf("Soil moisture OK (%d%% >= %d%%), skipping scheduler %s\n",
-						//	moisturePercent,
-						//	threshold,
-						//	scheduler_.getZone());
-						continue;
-					}
-
-					// If we reach here: moisture is BELOW threshold
-					// -> Watering needed
-					//Serial.printf("Soil moisture low (%d%% < %d%%), scheduler %s will run\n",
-					//	moisturePercent,
-					//	threshold,
-					//	scheduler_.getZone());
-				}
+			// Check if time is valid before automatic control
+			// Without valid time, automatic irrigation is not allowed
+			if (!ntpClient.isValidTime()) {
+				digitalWrite(RELAY_PINS[i_], RELAY_OFF);
+				continue;
 			}
 			
-			//Serial.printf("Checking scheduler %s: StartTime=%s, Duration=%d, Weekdays=%u\n",
-			//	scheduler_.getZone(),
-			//	scheduler_.getStartTimeString(),
-			//	scheduler_.getDuration(),
-			//	scheduler_.getWeekdays());
-			//Serial.printf("is active on day %d: %s\n", ntpClient.getDayOfWeek(), scheduler_.isActiveOnDay(ntpClient.getDayOfWeek()) ? "yes" : "no");
+			// Check moisture sensor if configured for this zone
+			int sensorIndex_ = scheduler_.getMoistureSensorIndex();
+			if (sensorIndex_ >= 0 && sensorIndex_ < MAX_SOIL_SENSORS) {
+				SoilMoistureSensor& sensor_ = soilMoistureSensors[sensorIndex_];
+
+				if (sensor_.isEnabled()) {
+					int moisturePercent_ = sensor_.getMoisturePercent();
+					if (moisturePercent_ >= 0) {
+						int threshold_ = sensor_.getThreshold();
+
+						// If moisture is ABOVE threshold, soil is wet enough
+						// -> DON'T water (continue)
+						if (moisturePercent_ >= threshold_) {
+							digitalWrite(RELAY_PINS[i_], RELAY_OFF);
+							continue;
+						}
+
+						// If we reach here: moisture is BELOW threshold
+						// -> Watering needed (proceed to schedule check)
+					}
+				}
+			}
 			
 			// Logik: duration > 0, Tag korrekt, aktuelle Zeit zwischen Startzeit und (Startzeit + Duration)
 			if (scheduler_.getDuration() > 0 &&
 				scheduler_.isActiveOnDay(ntpClient.getDayOfWeek()) &&
 				scheduler_.isActiveAtTime(ntpClient.getMinutesSinceMidnight())) {
-				digitalWrite(RELAY_PINS[i_], LOW);
-				//Serial.printf("Scheduler %s is active at %02d:%02d\n",
-				//	scheduler_.getZone(),
-				//	ntpClient.getHour(),
-				//	ntpClient.getMinute());
+				digitalWrite(RELAY_PINS[i_], RELAY_ON);
 			}
 			else {
-				digitalWrite(RELAY_PINS[i_], HIGH);
+				digitalWrite(RELAY_PINS[i_], RELAY_OFF);
 			}
 		}
 
