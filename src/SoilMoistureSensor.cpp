@@ -1,11 +1,13 @@
 #include "SoilMoistureSensor.h"
 
-#define MEASUREMENT_INTERVAL_MS (12UL * 60UL * 60UL * 1000UL) // 12 Stunden in Millisekunden
-#define POWER_ON_DELAY_MS 1000  // 1 Sekunde warten bis Sensor stabil ist
+#define MEASUREMENT_INTERVAL_MS (12UL * 60UL * 60UL * 1000UL)
+#define POWER_ON_DELAY_MS 1000
 
-SoilMoistureSensor::SoilMoistureSensor(const char* id, const char* label)
+SoilMoistureSensor::SoilMoistureSensor(const char* id, const char* label, int analogPin, int powerPin)
     : _id(id),
     ParameterGroup(id, label),
+    _analogPin(analogPin),
+    _powerPin(powerPin),
     _lastRawValue(-1),
     _lastMeasurementTime(0) {
 
@@ -37,11 +39,12 @@ void SoilMoistureSensor::applyDefaultValue() {
 }
 
 void SoilMoistureSensor::begin() {
-    pinMode(SOIL_MOISTURE_POWER_PIN, OUTPUT);
-    digitalWrite(SOIL_MOISTURE_POWER_PIN, LOW); // Sensor ausgeschaltet
-    pinMode(SOIL_MOISTURE_PIN, INPUT);
+    pinMode(_powerPin, OUTPUT);
+    digitalWrite(_powerPin, LOW);
+    pinMode(_analogPin, INPUT);
 
-    Serial.println("Soil moisture sensor initialized");
+    Serial.printf("Soil moisture sensor '%s' initialized (Pin: %d, Power: %d)\n", 
+        _NameValue, _analogPin, _powerPin);
 }
 
 const char* SoilMoistureSensor::getName() const {
@@ -66,38 +69,22 @@ bool SoilMoistureSensor::isEnabled() const {
 
 int SoilMoistureSensor::measureMoisture() {
     if (!isEnabled()) {
-        Serial.println("Soil sensor is disabled");
+        Serial.println("Sensor is disabled, skipping measurement");
         return -1;
     }
 
-    Serial.println("Starting soil moisture measurement...");
-
-    // Sensor einschalten
-    digitalWrite(SOIL_MOISTURE_POWER_PIN, HIGH);
-    Serial.println("Sensor powered ON");
-
-    // Warten bis Sensor stabil ist
+    digitalWrite(_powerPin, HIGH);
     delay(POWER_ON_DELAY_MS);
 
-    // Mehrere Messungen für Durchschnittswert
-    long sum = 0;
-    const int numReadings = 10;
-    for (int i = 0; i < numReadings; i++) {
-        sum += analogRead(SOIL_MOISTURE_PIN);
-        delay(10);
-    }
-    int rawValue = sum / numReadings;
+    int rawValue_ = analogRead(_analogPin);
 
-    // Sensor ausschalten
-    digitalWrite(SOIL_MOISTURE_POWER_PIN, LOW);
-    Serial.println("Sensor powered OFF");
+    digitalWrite(_powerPin, LOW);
 
-    _lastRawValue = rawValue;
+    _lastRawValue = rawValue_;
     _lastMeasurementTime = millis();
 
-    Serial.printf("Soil moisture measured: %d (raw), %d%%\n", rawValue, getMoisturePercent());
-
-    return rawValue;
+    Serial.printf("Soil moisture measured: %d (raw)\n", rawValue_);
+    return rawValue_;
 }
 
 int SoilMoistureSensor::getLastMoisture() const {
@@ -107,12 +94,13 @@ int SoilMoistureSensor::getLastMoisture() const {
 int SoilMoistureSensor::getMoisturePercent() const {
     if (_lastRawValue < 0) return -1;
 
-    int minVal = getMinValue();
-    int maxVal = getMaxValue();
+    int min_ = getMinValue();
+    int max_ = getMaxValue();
 
-    // Map von min/max auf 0-100%
-    int percent = map(_lastRawValue, minVal, maxVal, 0, 100);
-    return constrain(percent, 0, 100);
+    if (max_ <= min_) return 0;
+
+    int percent_ = map(_lastRawValue, min_, max_, 0, 100);
+    return constrain(percent_, 0, 100);
 }
 
 unsigned long SoilMoistureSensor::getLastMeasurementTime() const {
@@ -121,11 +109,14 @@ unsigned long SoilMoistureSensor::getLastMeasurementTime() const {
 
 bool SoilMoistureSensor::shouldMeasure() const {
     if (!isEnabled()) return false;
-    if (_lastMeasurementTime == 0) return true; // Noch nie gemessen
+    
+    if (_lastMeasurementTime == 0) return true;
 
-    unsigned long elapsed = millis() - _lastMeasurementTime;
-    return elapsed >= MEASUREMENT_INTERVAL_MS;
+    unsigned long elapsed_ = millis() - _lastMeasurementTime;
+    return elapsed_ >= MEASUREMENT_INTERVAL_MS;
 }
 
-// Globale Instanz
-SoilMoistureSensor soilMoistureSensor("soilsensor", "Soil Moisture Sensor");
+SoilMoistureSensor soilMoistureSensors[MAX_SOIL_SENSORS] = {
+    SoilMoistureSensor("soilsensor1", "Soil Sensor 1", SOIL_MOISTURE_PIN_1, SOIL_MOISTURE_POWER_PIN_1),
+    SoilMoistureSensor("soilsensor2", "Soil Sensor 2", SOIL_MOISTURE_PIN_2, SOIL_MOISTURE_POWER_PIN_2)
+};

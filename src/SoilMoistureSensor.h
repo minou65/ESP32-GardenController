@@ -12,30 +12,39 @@
 #define STRING_LEN 32
 #define NUMBER_LEN 5
 
-#define SOIL_MOISTURE_PIN 36       // Analog Pin für Messung
-#define SOIL_MOISTURE_POWER_PIN 33 // Digital Pin für Stromversorgung
+#define MAX_SOIL_SENSORS 2
+
+// Sensor 1 Pins
+#define SOIL_MOISTURE_PIN_1 36       // Analog Pin für Sensor 1
+#define SOIL_MOISTURE_POWER_PIN_1 13 // Power Pin für Sensor 1 (Relay 8)
+
+// Sensor 2 Pins
+#define SOIL_MOISTURE_PIN_2 39       // Analog Pin für Sensor 2
+#define SOIL_MOISTURE_POWER_PIN_2 12 // Power Pin für Sensor 2 (Relay 7)
 
 class SoilMoistureSensor : public iotwebconf::ParameterGroup {
 public:
-    SoilMoistureSensor(const char* id, const char* label);
+    SoilMoistureSensor(const char* id, const char* label, int analogPin, int powerPin);
     void applyDefaultValue() override;
 
     const char* getName() const;
-    int getMinValue() const;      // Trockener Boden
-    int getMaxValue() const;      // Nasser Boden
-    int getThreshold() const;     // Schwellwert zum Auslösen
+    int getMinValue() const;
+    int getMaxValue() const;
+    int getThreshold() const;
     bool isEnabled() const;
 
-    void begin();                 // Pin-Setup
-    int measureMoisture();        // Messung durchführen (mit Power on/off)
-    int getLastMoisture() const;  // Letzten gemessenen Wert abrufen
-    int getMoisturePercent() const; // Als Prozent 0-100%
+    void begin();
+    int measureMoisture();
+    int getLastMoisture() const;
+    int getMoisturePercent() const;
 
     unsigned long getLastMeasurementTime() const;
-    bool shouldMeasure() const;   // Prüft ob 12h vergangen
+    bool shouldMeasure() const;
 
 private:
     String _id;
+    int _analogPin;
+    int _powerPin;
     int _lastRawValue;
     unsigned long _lastMeasurementTime;
 
@@ -58,6 +67,6 @@ private:
     iotwebconf::CheckboxParameter _EnabledParam = iotwebconf::CheckboxParameter("Enabled", _EnabledId, _EnabledValue, STRING_LEN, false);
 };
 
-extern SoilMoistureSensor soilMoistureSensor;
+extern SoilMoistureSensor soilMoistureSensors[MAX_SOIL_SENSORS];
 
 #endif
