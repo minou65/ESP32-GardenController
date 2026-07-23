@@ -8,19 +8,22 @@ Scheduler::Scheduler(const char* id, const char* label)
     : _id(id),
     ParameterGroup(id, label) {
     snprintf(_ZoneValue, STRING_LEN, "");
-    snprintf(_WeekdaysValue, STRING_LEN, "127"); // 0x7F = all days
+    snprintf(_WeekdaysValue, STRING_LEN, "0,1,2,3,4,5,6");
     snprintf(_StartTimeValue, STRING_LEN, "00:00");
     snprintf(_DurationValue, NUMBER_LEN, "0");
+    snprintf(_MoistureSensorValue, NUMBER_LEN, "0");
 
     snprintf(_ZoneId, STRING_LEN, "%s-zone", _id.c_str());
     snprintf(_WeekdaysId, STRING_LEN, "%s-weekdays", _id.c_str());
     snprintf(_StartTimeId, STRING_LEN, "%s-starttime", _id.c_str());
     snprintf(_DurationId, STRING_LEN, "%s-duration", _id.c_str());
+    snprintf(_MoistureSensorId, STRING_LEN, "%s-moisturesensor", _id.c_str());
 
     this->addItem(&this->_ZoneParam);
     this->addItem(&this->_WeekdaysParam);
     this->addItem(&this->_StartTimeParam);
     this->addItem(&this->_DurationParam);
+    this->addItem(&this->_MoistureSensorParam);
 }
 
 void Scheduler::applyDefaultValue() {
@@ -28,6 +31,7 @@ void Scheduler::applyDefaultValue() {
     _WeekdaysParam.applyDefaultValue();
     _StartTimeParam.applyDefaultValue();
     _DurationParam.applyDefaultValue();
+    _MoistureSensorParam.applyDefaultValue();
 }
 
 const char* Scheduler::getZone() const {
@@ -73,6 +77,11 @@ int Scheduler::getDuration() const {
     return atoi(_DurationValue);
 }
 
+int Scheduler::getMoistureSensorIndex() const {
+    int value = atoi(_MoistureSensorValue);
+    return value - 1;  // 0 -> -1 (none), 1 -> 0 (sensor 1), 2 -> 1 (sensor 2)
+}
+
 bool Scheduler::isActiveOnDay(uint8_t dayOfWeek) const {
     // dayOfWeek: 0 = Sunday, 1 = Monday, ..., 6 = Saturday
     // or 1 = Monday, ..., 7 = Sunday (depending on your system)
@@ -110,7 +119,5 @@ Scheduler schedulers[MAX_SCHEDULERS] = {
 	Scheduler("scheduler3", "Zone 3"),
 	Scheduler("scheduler4", "Zone 4"),
 	Scheduler("scheduler5", "Zone 5"),
-	Scheduler("scheduler6", "Zone 6"),
-	Scheduler("scheduler7", "Zone 7"),
-	Scheduler("scheduler8", "Zone 8")
+	Scheduler("scheduler6", "Zone 6")
 };
