@@ -1,4 +1,3 @@
-
 #ifndef _HTML_h
 #define _HTML_h
 
@@ -19,6 +18,8 @@ const char html_output_styles[] PROGMEM = R"====(
 .output-btn.off.active { background: #f44336; color: #fff; }
 .output-btn.auto.active { background: #03a9f4; color: #fff; }
 .brightness-input { width: 50px; margin-left: 10px; text-align: center; }
+.measure-now-btn { padding: 5px 15px; border-radius: 5px; border: 1px solid #888; background: #ff9800; color: #fff; cursor: pointer; font-size: 0.9em; }
+.measure-now-btn:disabled { background: #ccc; cursor: not-allowed; }
 )====";
 
 const char html_form_end[] PROGMEM = R"=====(
@@ -60,7 +61,6 @@ function initializeTime() {
    var xhttp = new XMLHttpRequest();
    xhttp.onreadystatechange = function() {
        if (this.readyState == 4 && this.status == 200) {
-           // Parse "YYYY-MM-DD HH:MM:SS" format
            let serverTimeStr = this.responseText.trim();
            let serverTime = new Date(serverTimeStr.replace(' ', 'T'));
            let clientTime = new Date();
@@ -75,7 +75,6 @@ function initializeTime() {
 
 function updateDateTime() {
     let now = new Date(Date.now() + timeOffset);
-    // Format as HH:MM:SS
     let timeStr = now.toLocaleTimeString('de-DE', {
         hour: '2-digit',
         minute: '2-digit',
@@ -85,10 +84,8 @@ function updateDateTime() {
     document.getElementById('DateTimeValue').innerHTML = timeStr;
 }
 
-// Re-sync every 10 minutes to prevent drift
 setInterval(initializeTime, 600000);
 
-// Initial data request and periodic updates every 10 seconds
 requestData();
 setInterval(requestData, 10000);
 
@@ -102,19 +99,16 @@ function requestData() {
 function updateData(jsonData) {
     document.getElementById('RSSIValue').innerHTML = jsonData.RSSI;
 
-    // Update valve status display
     if (jsonData.valve) {
         for (let i = 1; i <= 8; i++) {
             let valveStatus = jsonData.valve['zone' + i];
             let statusSpan = document.getElementById('Zone' + i + 'Status');
-            
             if (statusSpan && valveStatus) {
                 statusSpan.textContent = valveStatus;
             }
         }
     }
 
-    // Update button states
     if (jsonData.button) {
         for (let i = 1; i <= 8; i++) {
             let buttonState = jsonData.button['zone' + i];
@@ -124,12 +118,10 @@ function updateData(jsonData) {
         }
     }
 
-    // Update moisture sensors
     if (jsonData.moisture) {
         for (let i = 1; i <= 2; i++) {
             let moistureValue = jsonData.moisture['sensor' + i];
             let moistureSpan = document.getElementById('SoilMoisture' + i + 'Percent');
-            
             if (moistureSpan && moistureValue !== null) {
                 moistureSpan.textContent = moistureValue + '%';
             }
@@ -154,11 +146,8 @@ document.addEventListener('DOMContentLoaded', function() {
   document.querySelectorAll('.btn-group').forEach(group => {
     group.querySelectorAll('.output-btn').forEach(btn => {
       btn.addEventListener('click', function() {
-        // Remove active from all buttons in this group
         group.querySelectorAll('.output-btn').forEach(b => b.classList.remove('active'));
-        // Set active on clicked button
         this.classList.add('active');
-        // Send state to backend via POST to /post
         let ch = this.getAttribute('data-ch');
         let state = this.getAttribute('data-state');
         let param = '';
@@ -181,6 +170,35 @@ document.addEventListener('DOMContentLoaded', function() {
         }).catch(error => {
           console.error('Error posting data:', error);
         });
+      });
+    });
+  });
+
+  document.querySelectorAll('.measure-now-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+      let sensorId = this.getAttribute('data-sensor');
+      this.disabled = true;
+      this.textContent = 'Measuring...';
+      fetch('/measure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'sensor=' + sensorId
+      })
+      .then(response => response.json())
+      .then(data => {
+        this.disabled = false;
+        this.textContent = 'Measure Now';
+        if (data.success) {
+          document.getElementById('SoilMoisture' + sensorId + 'Percent').textContent = data.percent + '%';
+        } else {
+          alert('Measurement failed: ' + (data.error || 'Unknown error'));
+        }
+      })
+      .catch(error => {
+        this.disabled = false;
+        this.textContent = 'Measure Now';
+        console.error('Error measuring:', error);
+        alert('Measurement failed');
       });
     });
   });

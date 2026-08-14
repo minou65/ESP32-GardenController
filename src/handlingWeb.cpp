@@ -4,6 +4,7 @@
 
 #include "handlingWeb.h"
 #include "html.h"
+#include "favicon.h"
 
 #include <Arduino.h>
 #include <ArduinoOTA.h>
@@ -12,7 +13,7 @@
 
 #include <IotWebConfAsyncUpdateServer.h>
 #include <IotWebConfAsyncTab.h>
-#include <IotWebRoot.h>
+#include <IotWebRootTab.h>
 #include <Preferences.h>
 
 
@@ -69,6 +70,7 @@ void handleWificonnected();
 void handleWebSerialCommand(const String& command);
 void handleOnProgress(size_t prg, size_t sz);
 void handleReboot(AsyncWebServerRequest* request);
+void handleMeasure(AsyncWebServerRequest* request);
 
 class CustomHtmlFormatProvider : public AsyncTabHtmlFormatProvider {
 public:
@@ -86,7 +88,7 @@ protected:
 };
 CustomHtmlFormatProvider* customHtmlFormatProvider = nullptr;
 
-class MyHtmlRootFormatProvider : public HtmlRootFormatProvider {
+class MyHtmlRootFormatProvider : public TabHtmlRootFormatProvider {
 public:
     String getHtmlTableRowClass(String name, String htmlclass, String id) {
         String s_ = F("<tr><td align=\"left\">{n}</td><td align=\"left\"><span id=\"{id}\" class=\"{c}\"></span></td></tr>\n");
@@ -108,13 +110,13 @@ public:
 
 protected:
     String getStyleInner() override {
-        String s_ = HtmlRootFormatProvider::getStyleInner();
+        String s_ = TabHtmlRootFormatProvider::getStyleInner();
         s_ += String(FPSTR(html_output_styles));
         return s_;
     }
 
     String getScriptInner() override {
-        String s_ = HtmlRootFormatProvider::getScriptInner();
+        String s_ = TabHtmlRootFormatProvider::getScriptInner();
 
         s_.replace("{millisecond}", "10000");
         s_ += String(FPSTR(html_script));
@@ -218,6 +220,8 @@ void setupWebServer() {
         }
     );
 
+    IconHandler::registerHandlers(&server, favicon_ico, sizeof(favicon_ico));
+
     server.on("/reboot", HTTP_GET, [](AsyncWebServerRequest* request) {
 		handleReboot(request);
         }
@@ -237,6 +241,10 @@ void setupWebServer() {
         handlePost(request);
         }
     );
+
+    server.on("/measure", HTTP_POST, [](AsyncWebServerRequest* request) {
+        handleMeasure(request);
+    });
 
     server.onNotFound([](AsyncWebServerRequest* request) {
         AsyncWebRequestWrapper asyncWebRequestWrapper_(request);
@@ -261,103 +269,172 @@ void handleRoot(AsyncWebServerRequest* request) {
         return;
     }
 
+    AsyncResponseStream* response_ = request->beginResponseStream("text/html; charset=UTF-8");
     MyHtmlRootFormatProvider fp_;
 
-    String response_ = "";
-    response_ += fp_.getHtmlHead(iotWebConf.getThingName());
+    // === Create 3 Tabs ===
+    fp_.addTab("Status", "status");
+    fp_.addTab("Control", "control");
+    fp_.addTab("System", "system");
 
-    response_ += F("<link rel=\"icon\" type=\"image/png\" sizes=\"96x96\" href=\"/apple-touch-icon.png\">\n");
-    response_ += F("<link rel=\"apple-touch-icon\" sizes=\"96x96\" href=\"/apple-touch-icon.png\">\n");
+    // Header
+    response_->print(fp_.getHtmlHead(iotWebConf.getThingName()));
+    response_->print(fp_.getIconLinks());
+    response_->print(fp_.getHtmlStyle());
+    response_->print(fp_.getHtmlHeadEnd());
+    response_->print(fp_.getHtmlScript());
+    response_->print(fp_.getHtmlTabButtons());
 
-    response_ += fp_.getHtmlStyle();
-    response_ += fp_.getHtmlHeadEnd();
-    response_ += fp_.getHtmlScript();
+    // === TAB 1: Status (Zones & Sensors) ===
+    response_->print(fp_.getHtmlTabContentStart("status"));
 
-    response_ += fp_.getHtmlTable();
-    response_ += fp_.getHtmlTableRow() + fp_.getHtmlTableCol();
+    // Time and RSSI in one row
+    response_->print(F("<fieldset align=left style=\"border: 1px solid\">"));
+    response_->print(F("<table border=\"0\" align=\"center\" width=\"100%\">"));
+    response_->print(F("<tr><td align=\"left\"><span id=\"DateTimeValue\">Loading...</span></td><td align=\"right\"><span id=\"RSSIValue\">no data</span></td></tr>"));
+    response_->print(F("</table></fieldset>"));
 
-    // Status-Zeile mit DateTime und RSSI
-    response_ += F("<fieldset align=left style=\"border: 1px solid\">\n");
-    response_ += F("<table border=\"0\" align=\"center\" width=\"100%\">\n");
-    response_ += F("<tr><td align=\"left\"><span id=\"DateTimeValue\">not valid</span></td><td align=\"right\"><span id=\"RSSIValue\">-100</span> dBm</td></tr>\n");
-    response_ += fp_.getHtmlTableEnd();
-    response_ += fp_.getHtmlFieldsetEnd();
-
-    // Bodenfeuchte-Sensoren
-// Bodenfeuchte-Sensoren - alle in einem Rahmen
-    bool hasAnySensor = false;
+    // Soil Moisture Sensors (if any enabled)
+    bool hasSensors_ = false;
     for (int i = 0; i < MAX_SOIL_SENSORS; i++) {
         if (soilMoistureSensors[i].isEnabled()) {
-            hasAnySensor = true;
+            hasSensors_ = true;
             break;
         }
     }
 
-    if (hasAnySensor) {
-        response_ += F("<fieldset align=left style=\"border: 1px solid\">\n");
-        response_ += F("<legend>Soil Moisture Sensors</legend>\n");
-        response_ += F("<table border=\"0\" align=\"center\" width=\"100%\">\n");
-
+    if (hasSensors_) {
+        response_->print(fp_.getHtmlFieldset("Soil Moisture Sensors"));
+        response_->print(fp_.getHtmlTable());
         for (int i = 0; i < MAX_SOIL_SENSORS; i++) {
             if (soilMoistureSensors[i].isEnabled()) {
                 String sensorName = String(soilMoistureSensors[i].getName());
                 if (sensorName.length() == 0) {
                     sensorName = "Soil Sensor " + String(i + 1);
                 }
-                response_ += fp_.getHtmlTableRowSpan(sensorName, "N/A", "SoilMoisture" + String(i + 1) + "Percent");
+                response_->print(F("<tr><td align=\"left\">"));
+                response_->print(sensorName);
+                response_->print(F(":</td><td align=\"right\"><span id=\"SoilMoisture"));
+                response_->print(String(i + 1));
+                response_->print(F("Percent\">N/A</span></td></tr>"));
             }
         }
-
-        response_ += fp_.getHtmlTableEnd();
-        response_ += fp_.getHtmlFieldsetEnd();
+        response_->print(fp_.getHtmlTableEnd());
+        response_->print(fp_.getHtmlFieldsetEnd());
     }
 
-    // Aktuelle Werte der Zonen
-    response_ += F("<fieldset align=left style=\"border: 1px solid\">\n");
-    response_ += F("<legend>Zonen Status</legend>\n");
-    response_ += F("<table border=\"0\" align=\"center\" width=\"100%\">\n");
-
+    // Zone Status
+    response_->print(fp_.getHtmlFieldset("Zone Status"));
+    response_->print(fp_.getHtmlTable());
     for (uint8_t i = 0; i < MAX_SCHEDULERS; i++) {
         String zoneName = String(schedulers[i].getZone());
         if (zoneName.length() == 0) {
             zoneName = "Zone " + String(i + 1);
         }
-        response_ += fp_.getHtmlTableRowSpan(zoneName, "OFF", "Zone" + String(i + 1) + "Status");
+        response_->print(F("<tr><td align=\"left\">"));
+        response_->print(zoneName);
+        response_->print(F(":</td><td align=\"right\"><span id=\"Zone"));
+        response_->print(String(i + 1));
+        response_->print(F("Status\">OFF</span></td></tr>"));
     }
+    response_->print(fp_.getHtmlTableEnd());
+    response_->print(fp_.getHtmlFieldsetEnd());
 
-    response_ += fp_.getHtmlTableEnd();
-    response_ += fp_.getHtmlFieldsetEnd();
+    response_->print(fp_.getHtmlTabContentEnd());
 
-    // Manuelle Steuerung der Ausgänge
-    response_ += F("<fieldset align=left style=\"border: 1px solid\">\n");
-    response_ += F("<legend>Manuelle Steuerung</legend>\n");
-    response_ += F("<table border=\"0\" align=\"center\" width=\"100%\">\n");
+    // === TAB 2: Manual Control ===
+    response_->print(fp_.getHtmlTabContentStart("control"));
+
+    // Zone Control
+    response_->print(fp_.getHtmlFieldset("Manual Zone Control"));
+    response_->print(fp_.getHtmlTable());
 
     for (uint8_t ch_ = 0; ch_ < MAX_SCHEDULERS; ++ch_) {
         String zoneName = String(schedulers[ch_].getZone());
         if (zoneName.length() == 0) {
             zoneName = "Zone " + String(ch_ + 1);
         }
-        response_ += fp_.getOutputControlRow(zoneName, String(ch_ + 1), outputStatus[ch_], 0, false);
+        response_->print(fp_.getOutputControlRow(zoneName, String(ch_ + 1), outputStatus[ch_], 0, false));
     }
 
-    response_ += fp_.getHtmlTableEnd();
-    response_ += fp_.getHtmlFieldsetEnd();
+    response_->print(fp_.getHtmlTableEnd());
+    response_->print(fp_.getHtmlFieldsetEnd());
 
-    response_ += fp_.addNewLine(2);
+    // Check if any sensors are enabled
+    for (int i = 0; i < MAX_SOIL_SENSORS; i++) {
+        if (soilMoistureSensors[i].isEnabled()) {
+            response_->print(fp_.getHtmlFieldset("Soil Moisture Sensors"));
+            response_->print(fp_.getHtmlTable());
+            
+            // Loop again to add all enabled sensors
+            for (int j = 0; j < MAX_SOIL_SENSORS; j++) {
+                if (soilMoistureSensors[j].isEnabled()) {
+                    String sensorName = String(soilMoistureSensors[j].getName());
+                    if (sensorName.length() == 0) {
+                        sensorName = "Soil Sensor " + String(j + 1);
+                    }
+                    response_->print(F("<tr><td align=\"left\">"));
+                    response_->print(sensorName);
+                    response_->print(F(":</td><td align=\"right\">"));
+                    response_->print(F("<button class='measure-now-btn' data-sensor='"));
+                    response_->print(String(j + 1));
+                    response_->print(F("'>Measure Now</button>"));
+                    response_->print(F("</td></tr>"));
+                }
+            }
+            
+            response_->print(fp_.getHtmlTableEnd());
+            response_->print(fp_.getHtmlFieldsetEnd());
+            break; // Exit outer loop after adding fieldset
+        }
+    }
 
-    // Footer mit Links
-    response_ += fp_.getHtmlTable();
-    response_ += fp_.getHtmlTableRowText("Open <a href='/config'>configuration page</a>.");
-    response_ += fp_.getHtmlTableRowText("Open <a href='/webserial' target='_blank'>WebSerial Console</a> for live logs.");
-    response_ += fp_.getHtmlTableRowText(fp_.getHtmlVersion(Version));
-    response_ += fp_.getHtmlTableEnd();
+    response_->print(fp_.getHtmlTabContentEnd());
 
-    response_ += fp_.getHtmlTableColEnd() + fp_.getHtmlTableRowEnd();
-    response_ += fp_.getHtmlTableEnd();
-    response_ += fp_.getHtmlEnd();
+    // === TAB 3: System Info ===
+    response_->print(fp_.getHtmlTabContentStart("system"));
 
-    request->send(200, "text/html; charset=UTF-8", response_);
+    response_->print(fp_.getHtmlFieldset("Network"));
+    response_->print(fp_.getHtmlTable());
+
+    uint64_t chipid_ = ESP.getEfuseMac();
+    char macStr_[18];
+    snprintf(macStr_, sizeof(macStr_), "%02X:%02X:%02X:%02X:%02X:%02X",
+        (uint8_t)(chipid_ >> 40), (uint8_t)(chipid_ >> 32),
+        (uint8_t)(chipid_ >> 24), (uint8_t)(chipid_ >> 16),
+        (uint8_t)(chipid_ >> 8), (uint8_t)(chipid_));
+    response_->print(fp_.getHtmlTableRowText("MAC Address:", String(macStr_)));
+
+    String ipAddress_;
+    if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
+        ipAddress_ = WiFi.softAPIP().toString();
+    }
+    else {
+        ipAddress_ = WiFi.localIP().toString();
+    }
+    if (ipAddress_ == "0.0.0.0" || ipAddress_.isEmpty()) {
+        ipAddress_ = "Not connected";
+    }
+    response_->print(fp_.getHtmlTableRowText("IP Address:", ipAddress_));
+
+    response_->print(fp_.getHtmlTableEnd());
+    response_->print(fp_.getHtmlFieldsetEnd());
+
+    response_->print(fp_.getHtmlTabContentEnd());
+
+    // Footer
+    response_->print(fp_.addNewLine(2));
+    response_->print(fp_.getHtmlTable());
+    response_->print(fp_.getHtmlTableRowText("Open <a href='/config'>configuration page</a>."));
+    response_->print(fp_.getHtmlTableRowText("Open <a href='/webserial' target='_blank'>WebSerial Console</a> for live logs."));
+    response_->print(fp_.getHtmlTableRowText(fp_.getHtmlVersion(Version)));
+    response_->print(fp_.getHtmlTableEnd());
+
+    response_->print(fp_.getBodyEnd());
+    response_->print(fp_.getHtmlEnd());
+
+    response_->addHeader("Server", "ESP Async Web Server");
+    request->send(response_);
 }
 
 void handleDateTime(AsyncWebServerRequest* request) {
@@ -575,6 +652,42 @@ void handleReboot(AsyncWebServerRequest* request) {
     request->client()->setNoDelay(true); // Disable Nagle's algorithm so the client gets the response immediately
     request->send(response_);
     ShouldReboot = true;
+}
+
+void handleMeasure(AsyncWebServerRequest* request) {
+    String json = "{";
+    
+    if (request->hasParam("sensor", true)) {
+        String sensorParam = request->getParam("sensor", true)->value();
+        int sensorId = sensorParam.toInt() - 1; // Convert to 0-based index
+        
+        if (sensorId >= 0 && sensorId < MAX_SOIL_SENSORS) {
+            if (soilMoistureSensors[sensorId].isEnabled()) {
+                int rawValue = soilMoistureSensors[sensorId].measureMoisture();
+                int percent = soilMoistureSensors[sensorId].getMoisturePercent();
+                
+                json += "\"success\":true,";
+                json += "\"sensor\":" + String(sensorId + 1) + ",";
+                json += "\"raw\":" + String(rawValue) + ",";
+                json += "\"percent\":" + String(percent);
+                
+                Serial.printf("Manual measurement: Sensor %d = %d%% (%d raw)\n", 
+                    sensorId + 1, percent, rawValue);
+            } else {
+                json += "\"success\":false,";
+                json += "\"error\":\"Sensor is disabled\"";
+            }
+        } else {
+            json += "\"success\":false,";
+            json += "\"error\":\"Invalid sensor ID\"";
+        }
+    } else {
+        json += "\"success\":false,";
+        json += "\"error\":\"Missing sensor parameter\"";
+    }
+    
+    json += "}";
+    request->send(200, "application/json", json);
 }
 
 void checkManualTimeout() {
