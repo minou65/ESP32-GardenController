@@ -35,7 +35,7 @@ extern char Version[];
 #define ON_LEVEL HIGH
 
 // -- Initial name of the Thing. Used e.g. as SSID of the own Access Point.
-const char thingName[] = "GardenaController";
+const char thingName[] = "GardenController";
 
 DNSServer dnsServer;
 AsyncWebServer server(80);
