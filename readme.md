@@ -1,7 +1,7 @@
-# Gardena Computer
+# Garden Computer
 
 ## Overview
-The ESP32 Gardena Computer is an intelligent irrigation controller for up to 6 valve zones. It is based on per-zone schedules, optional NTP time synchronization, and optional soil moisture gating with support for up to 2 soil moisture sensors.
+The ESP32 Garden Computer is an intelligent irrigation controller for up to 6 valve zones. It is based on per-zone schedules, optional NTP time synchronization, and optional soil moisture gating with support for up to 2 soil moisture sensors.
 
 ## Features
 
@@ -147,7 +147,7 @@ The device is configured through the web interface at `/config`. The configurati
 Basic device connectivity and network settings.
 
 **Configuration fields:**
-- Thing Name: device name in the network (default: `GardenaController`)
+- Thing Name: device name in the network (default: `GardenController`)
 - AP Password: password for Access Point mode (initial default: `123456789`)
 - WIFI SSID: Wi-Fi network name
 - WIFI Password: Wi-Fi password
