@@ -33,6 +33,8 @@ extern AsyncIotWebConfTab iotWebConf;
 void setupWebServer();
 void loopWebServer();
 void checkManualTimeout();  // Check for 30-minute timeout
+void saveOutputStatus();     // Save output status to preferences
+void loadOutputStatus();     // Load output status from preferences
 
 #define MANUAL_TIMEOUT_MS (30UL * 60UL * 1000UL)  // 30 minutes in milliseconds
 

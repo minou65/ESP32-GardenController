@@ -5,6 +5,7 @@
 #include "handlingWeb.h"
 #include "html.h"
 #include "favicon.h"
+#include "EventLogger.h"
 
 #include <Arduino.h>
 #include <ArduinoOTA.h>
@@ -15,6 +16,10 @@
 #include <IotWebConfAsyncTab.h>
 #include <IotWebRootTab.h>
 #include <Preferences.h>
+
+// WebSerial High Performance Mode - sendet Nachrichten sofort
+#define WSL_HIGH_PERF
+#include <WebSerial.h>
 
 
 // -- Initial password to connect to the Thing, when it creates an own Access Point.
@@ -55,7 +60,12 @@ bool updateOutputs = false;
 
 extern const int RELAY_PINS[];
 
-// -- Method declarations.
+// WebSerial state tracking
+static int previousConnectionCount = 0;
+static unsigned long lastConnectionChange = 0;
+static bool waitingToSendHistory = false;
+
+ // -- Method declarations.
 void handleRoot(AsyncWebServerRequest* request);
 void handleDateTime(AsyncWebServerRequest* request);
 void handleData(AsyncWebServerRequest* request);
@@ -67,7 +77,7 @@ void handleConfigSavedPage(iotwebconf::WebRequestWrapper* webRequestWrapper);
 void handleConnectWifi(const char* ssid, const char* password);
 iotwebconf::WifiAuthInfo* handleConnectWifiFailure();
 void handleWificonnected();
-void handleWebSerialCommand(const String& command);
+void handleWebSerialCommand(uint8_t* data, size_t len);
 void handleOnProgress(size_t prg, size_t sz);
 void handleReboot(AsyncWebServerRequest* request);
 void handleMeasure(AsyncWebServerRequest* request);
@@ -134,7 +144,7 @@ void saveOutputStatus() {
     }
 
     pref_.end();
-	Serial.println(F("Output status saved to preferences."));
+	eventLogger.log(F("Output status saved to preferences"));
 }
 
 void loadOutputStatus() {
@@ -158,8 +168,8 @@ void loadOutputStatus() {
     if (shouldsave_) {
         saveOutputStatus(); // Save the reset state back to preferences
 	}
+	eventLogger.log(F("Output status loaded from preferences."));
 
-	Serial.println(F("Output status loaded from preferences."));
 }
 
 
@@ -252,10 +262,60 @@ void setupWebServer() {
         }
     );
 
+    // WebSerial Initialisierung
+    WebSerial.begin(&server, "/webserial");
+    
+    // Handler für eingehende Nachrichten
+    WebSerial.onMessage(handleWebSerialCommand);
+    
+    // Callback für Live-Updates registrieren
+    eventLogger.setLiveCallback([](const EventLogger::Event& event_) {
+        WebSerial.println(eventLogger.formatEvent(event_));
+        }
+    );
+    
+    eventLogger.log(F("WebSerial initialized on /webserial"));
 }
 
 void loopWebServer() {
     iotWebConf.doLoop();
+    
+    // WebSerial loop
+    WebSerial.loop();
+    
+    // Connection Count prüfen
+    int currentConnectionCount = WebSerial.getConnectionCount();
+    
+    // Verbindungsänderung erkannt
+    if (currentConnectionCount != previousConnectionCount) {
+        if (currentConnectionCount > 0) {
+            // Neue Verbindung
+            waitingToSendHistory = true;
+            lastConnectionChange = millis();
+        }
+        previousConnectionCount = currentConnectionCount;
+    }
+    
+    // Nach 500ms Historie senden
+    if (waitingToSendHistory && currentConnectionCount > 0 && (millis() - lastConnectionChange) >= 500) {
+        waitingToSendHistory = false;
+        
+        WebSerial.println();
+        WebSerial.println("=== Garden Controller WebSerial ===");
+        WebSerial.println("Type 'help' for available commands");
+        WebSerial.println();
+        
+        auto events_ = eventLogger.getEvents();
+        if (!events_.empty()) {
+            WebSerial.println("=== Event History (" + String(events_.size()) + " events) ===");
+            for (const auto& event_ : events_) {
+                WebSerial.println(eventLogger.formatEvent(event_));
+            }
+            WebSerial.println();
+        }
+        WebSerial.println("=== Live Events ===");
+        WebSerial.println();
+    }
 
     if (!ShouldReboot) {
         ShouldReboot = AsyncUpdater.isFinished();
@@ -503,25 +563,26 @@ void handleData(AsyncWebServerRequest* request) {
 void handlePost(AsyncWebServerRequest* request) {
     int params_ = request->params();
 
-    if (request->hasParam("reset", true)) {
-
-		ntpConfig.applyDefaultValue();
-
-        for (int i_ = 0; i_ < MAX_SOIL_SENSORS; i_++) {
-            soilMoistureSensors[i_].applyDefaultValue();
-		}
-
-        for (int i_ = 0; i_ < MAX_SCHEDULERS; i_++) {
-            schedulers[i_].applyDefaultValue();
-		}
-
-        Serial.println("Resetting output status to AUTO");
+    // Check for "resetall" parameter
+    if (request->hasParam("resetall", true)) {
+        eventLogger.log("All zones reset to AUTO mode and defaults applied");
         for (int i_ = 0; i_ < MAX_SCHEDULERS; i_++) {
             outputStatus[i_] = OUTPUT_AUTO;
-            digitalWrite(RELAY_PINS[i_], RELAY_OFF); // Set all relays to OFF
+            digitalWrite(RELAY_PINS[i_], RELAY_OFF);
+            schedulers[i_].applyDefaultValue();
         }
+        
+        // Reset soil moisture sensors
+        for (int i_ = 0; i_ < MAX_SOIL_SENSORS; i_++) {
+            soilMoistureSensors[i_].applyDefaultValue();
+        }
+        
+        // Reset NTP config
+        ntpConfig.applyDefaultValue();
+        
         saveOutputStatus();
-        request->send(200, "text/plain", "Output status reset to AUTO");
+        updateOutputs = true;
+        request->send(200, "text/plain", "Output status reset to AUTO and defaults applied");
         return;
 	}
 
@@ -531,34 +592,31 @@ void handlePost(AsyncWebServerRequest* request) {
             String name_ = p->name();
             String value_ = p->value();
 
-            Serial.printf("POST parameter: %s = %s\n", name_.c_str(), value_.c_str());
-
             for (int z_ = 1; z_ <= 8; z_++) {
                 if (name_ == "ch" + String(z_)) {
                     int channel_ = z_ - 1;
                     if (value_ == "on") {
-                        digitalWrite(RELAY_PINS[channel_], RELAY_ON);
-                        Serial.printf("Zone %d turned ON manually - 30min timeout started\n", z_);
-                        Serial.printf("Relay pin %d set to RELAY_ON\n", RELAY_PINS[channel_]);
                         outputStatus[channel_] = OUTPUT_ON;
-                        manualOnTimestamp[channel_] = millis();  // Start timeout timer
+                        manualOnTimestamp[channel_] = millis();
+                        eventLogger.logf("Zone %d (%s) manual ON requested", 
+                                        z_, schedulers[channel_].getZone());
                     }
                     else if (value_ == "off") {
-                        digitalWrite(RELAY_PINS[channel_], RELAY_OFF);
-                        Serial.printf("Zone %d turned OFF\n", z_);
-                        Serial.printf("Relay pin %d set to RELAY_OFF\n", RELAY_PINS[channel_]);
                         outputStatus[channel_] = OUTPUT_OFF;
-                        manualOnTimestamp[channel_] = 0;  // Clear timeout timer
+                        manualOnTimestamp[channel_] = 0;
+                        eventLogger.logf("Zone %d (%s) manual OFF requested", 
+                                        z_, schedulers[channel_].getZone());
                     }
                     else if (value_ == "auto") {
-                        Serial.printf("Zone %d set to AUTO\n", z_);
                         outputStatus[channel_] = OUTPUT_AUTO;
-                        manualOnTimestamp[channel_] = 0;  // Clear timeout timer
+                        manualOnTimestamp[channel_] = 0;
+                        eventLogger.logf("Zone %d (%s) AUTO mode requested", 
+                                        z_, schedulers[channel_].getZone());
                     }
                 }
             }
 			saveOutputStatus();
-			updateOutputs = true;  // Flag to indicate that outputs have changed and need to be updated
+			updateOutputs = true;
         }
     }
 
@@ -586,7 +644,7 @@ void handleSSIDNotConfiguredPage(iotwebconf::WebRequestWrapper* webRequestWrappe
 }
 
 void handleConfigSaved() {
-    Serial.println("Config saved");
+	eventLogger.log("Configuration saved via WebConfig");
     ConfigChanged = true;
 }
 
@@ -596,14 +654,12 @@ void handleConfigSavedPage(iotwebconf::WebRequestWrapper* webRequestWrapper) {
 }
 
 void handleConnectWifi(const char* ssid, const char* password) {
-    Serial.println("Connecting to WiFi ...");
-    Serial.println(ssid);
-
+    eventLogger.logf("Connecting to WiFi SSID: %s", ssid);
     WiFi.begin(ssid, password);
 }
 
 iotwebconf::WifiAuthInfo* handleConnectWifiFailure() {
-    Serial.println("WLAN-Verbindung fehlgeschlagen");
+	eventLogger.log(F("WiFi connection failed"));
 
     static iotwebconf::WifiAuthInfo auth_;
     auth_ = iotWebConf.getWifiAuthInfo();
@@ -611,19 +667,96 @@ iotwebconf::WifiAuthInfo* handleConnectWifiFailure() {
 }
 
 void handleWificonnected() {
-    Serial.println("WLAN verbunden");
-    Serial.print("IP-Adresse: ");
-    Serial.println(WiFi.localIP());
+    eventLogger.logf("WiFi connected to %s", WiFi.SSID().c_str());
+    eventLogger.logf("IP address: %s", WiFi.localIP().toString().c_str());
     ArduinoOTA.begin();
+    
+    // Beim ersten Verbinden: Event-Buffer an WebSerial senden
+    auto events_ = eventLogger.getEvents();
+    for (const auto& event_ : events_) {
+        String formattedMsg_ = "[" + String(event_.timestamp / 1000) + "s] " + event_.message;
+        WebSerial.println(formattedMsg_);
+    }
 }
 
-void handleWebSerialCommand(const String& command) {
-    Serial.print("WebSerial Kommando: ");
-    Serial.println(command);
-
+void handleWebSerialCommand(uint8_t* data, size_t len) {
+    // Kommando in String umwandeln
+    String command_ = "";
+    for (size_t i_ = 0; i_ < len; i_++) {
+        command_ += (char)data[i_];
+    }
+    command_.trim();
+    
+    // Leere Kommandos ignorieren
+    if (command_.length() == 0) {
+        return;
+    }
+    
+    eventLogger.logf("WebSerial: %s", command_.c_str());
+    
     // Kommandos verarbeiten
-    if (command == "reboot") {
+    if (command_ == "help") {
+        WebSerial.println("=== Available Commands ===");
+        WebSerial.println("  help     - Show this help");
+        WebSerial.println("  reboot   - Reboot the device");
+        WebSerial.println("  clear    - Clear event buffer");
+        WebSerial.println("  status   - Show system status");
+        WebSerial.println("  history  - Show all buffered events");
+        WebSerial.println("  zones    - Show zone status");
+    }
+    else if (command_ == "reboot") {
+        WebSerial.println(">>> Rebooting device...");
+        eventLogger.log("Reboot requested via WebSerial");
+        delay(100);
         ShouldReboot = true;
+    }
+    else if (command_ == "clear") {
+        eventLogger.clear();
+        WebSerial.println(">>> Event buffer cleared");
+    }
+    else if (command_ == "status") {
+        WebSerial.println("=== System Status ===");
+        WebSerial.println("Version: " + String(Version));
+        WebSerial.println("WiFi SSID: " + String(WiFi.SSID()));
+        WebSerial.println("WiFi RSSI: " + String(WiFi.RSSI()) + " dBm");
+        WebSerial.println("IP Address: " + WiFi.localIP().toString());
+        
+        unsigned long uptime_ = millis() / 1000;
+        unsigned long days_ = uptime_ / 86400;
+        unsigned long hours_ = (uptime_ % 86400) / 3600;
+        unsigned long minutes_ = (uptime_ % 3600) / 60;
+        unsigned long seconds_ = uptime_ % 60;
+        
+        WebSerial.printf("Uptime: %lud %02lu:%02lu:%02lu\n", days_, hours_, minutes_, seconds_);
+        WebSerial.println("Free Heap: " + String(ESP.getFreeHeap()) + " bytes");
+        WebSerial.println("Events in buffer: " + String(eventLogger.count()) + "/" + String(EVENT_BUFFER_SIZE));
+    }
+    else if (command_ == "history") {
+        auto events_ = eventLogger.getEvents();
+        WebSerial.println("=== Event History (" + String(events_.size()) + " events) ===");
+        if (events_.empty()) {
+            WebSerial.println("(No events in buffer)");
+        } else {
+            for (const auto& event_ : events_) {
+                WebSerial.println(eventLogger.formatEvent(event_));
+            }
+        }
+    }
+    else if (command_ == "zones") {
+        WebSerial.println("=== Zone Status ===");
+        for (int i_ = 0; i_ < MAX_SCHEDULERS; i_++) {
+            String status_ = "";
+            switch (outputStatus[i_]) {
+                case OUTPUT_OFF: status_ = "OFF"; break;
+                case OUTPUT_ON: status_ = "ON"; break;
+                case OUTPUT_AUTO: status_ = "AUTO"; break;
+            }
+            WebSerial.printf("Zone %d: %s (Pin %d)\n", i_ + 1, status_.c_str(), RELAY_PINS[i_]);
+        }
+    }
+    else {
+        WebSerial.println(">>> Unknown command: " + command_);
+        WebSerial.println(">>> Type 'help' for available commands");
     }
 }
 
@@ -696,7 +829,6 @@ void checkManualTimeout() {
     for (int i = 0; i < MAX_SCHEDULERS; i++) {
         // Check if zone is manually ON and timeout has expired
         if (outputStatus[i] == OUTPUT_ON && manualOnTimestamp[i] > 0) {
-            // Handle millis() overflow
             unsigned long elapsed = currentMillis - manualOnTimestamp[i];
 
             if (elapsed >= MANUAL_TIMEOUT_MS) {
@@ -706,7 +838,8 @@ void checkManualTimeout() {
                 manualOnTimestamp[i] = 0;
                 saveOutputStatus();
 
-                Serial.printf("Zone %d: 30-minute timeout expired, switched to AUTO\n", i + 1);
+                eventLogger.logf("Zone %d (%s): 30min timeout expired, switched to AUTO", 
+                                i + 1, schedulers[i].getZone());
             }
         }
     }

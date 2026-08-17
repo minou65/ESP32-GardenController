@@ -9,6 +9,7 @@
 #include "Scheduler.h"
 #include "Neotimer.h"
 #include "version.h"
+#include "EventLogger.h"
 
 
 #include <Arduino.h>
@@ -25,7 +26,7 @@ void setup() {
 		delay(1);
 	}
 
-	Serial.printf("ESP32 Gardena Controller Version: %s\n", Version);
+	eventLogger.logf("ESP32 Gardena Controller Version: %s", Version);
 
 	for (int i_ = 0; i_ < MAX_SCHEDULERS; i_++) {
 		pinMode(RELAY_PINS[i_], OUTPUT);
@@ -33,22 +34,26 @@ void setup() {
 		outputStatus[i_] = OUTPUT_AUTO;
 		manualOnTimestamp[i_] = 0;
 	}
+	eventLogger.log(String(MAX_SCHEDULERS) + " relay outputs initialized");
 
 	for (int i_ = 0; i_ < MAX_SOIL_SENSORS; i_++) {
 		soilMoistureSensors[i_].begin();
 	}
+	eventLogger.log(String(MAX_SOIL_SENSORS) + " soil moisture sensors initialized");
 
-	Serial.println("Connecting to WiFi and setting up web server...");
+	eventLogger.log("Starting web server setup...");
 	setupWebServer();
 
-	Serial.println("Setting up NTP client...");
+	eventLogger.log("Setting up NTP client...");
 	if (ntpConfig.useNtpServer()) {
-		Serial.printf("    Using NTP server: %s, Timezone: %s\n", ntpConfig.ntpServer().c_str(), ntpConfig.timeZone().c_str());
+		eventLogger.logf("    NTP server: %s, Timezone: %s", ntpConfig.ntpServer().c_str(), ntpConfig.timeZone().c_str());
 		ntpClient.begin(ntpConfig.ntpServer(), ntpConfig.timeZone(), 0);
 	}
 	else {
-		Serial.println(F("    NTP not used"));
+		eventLogger.log("    NTP disabled");
 	}
+	
+	eventLogger.log("Setup completed successfully");
 }
 
 void loop() {
@@ -76,14 +81,26 @@ void loop() {
 		
 		for (int i_ = 0; i_ < MAX_SCHEDULERS; i_++) {
 			Scheduler& scheduler_ = schedulers[i_];
+			
+			// Aktuellen Pin-Status auslesen (VOR der Änderung)
+			int previousState_ = digitalRead(RELAY_PINS[i_]);
+			
 			switch(outputStatus[i_]) {
 				case OUTPUT_ON:
 					digitalWrite(RELAY_PINS[i_], RELAY_ON);
-					//Serial.printf("Scheduler %s is manually ON\n", scheduler_.getZone());
+					// Log nur bei Statusänderung
+					if (previousState_ != RELAY_ON) {
+						eventLogger.logf("Zone %d (%s) turned ON (manual)", 
+						                i_ + 1, scheduler_.getZone());
+					}
 					continue;
 				case OUTPUT_OFF:
 					digitalWrite(RELAY_PINS[i_], RELAY_OFF);
-					//Serial.printf("Scheduler %s is manually OFF\n", scheduler_.getZone());
+					// Log nur bei Statusänderung
+					if (previousState_ != RELAY_OFF) {
+						eventLogger.logf("Zone %d (%s) turned OFF (manual)", 
+						                i_ + 1, scheduler_.getZone());
+					}
 					continue;
 				case OUTPUT_AUTO:
 					// Automatikbetrieb, weiter unten prüfen
@@ -94,6 +111,11 @@ void loop() {
 			// Without valid time, automatic irrigation is not allowed
 			if (!ntpClient.isValidTime()) {
 				digitalWrite(RELAY_PINS[i_], RELAY_OFF);
+				// Log nur bei Statusänderung
+				if (previousState_ != RELAY_OFF) {
+					eventLogger.logf("Zone %d (%s) turned OFF (no valid time)", 
+					                i_ + 1, scheduler_.getZone());
+				}
 				continue;
 			}
 			
@@ -111,6 +133,12 @@ void loop() {
 						// -> DON'T water (continue)
 						if (moisturePercent_ >= threshold_) {
 							digitalWrite(RELAY_PINS[i_], RELAY_OFF);
+							// Log nur bei Statusänderung
+							if (previousState_ != RELAY_OFF) {
+								eventLogger.logf("Zone %d (%s) turned OFF (moisture %d%% >= %d%%)", 
+								                i_ + 1, scheduler_.getZone(), 
+								                moisturePercent_, threshold_);
+							}
 							continue;
 						}
 
@@ -125,18 +153,26 @@ void loop() {
 				scheduler_.isActiveOnDay(ntpClient.getDayOfWeek()) &&
 				scheduler_.isActiveAtTime(ntpClient.getMinutesSinceMidnight())) {
 				digitalWrite(RELAY_PINS[i_], RELAY_ON);
+				// Log nur bei Statusänderung
+				if (previousState_ != RELAY_ON) {
+					eventLogger.logf("Zone %d (%s) turned ON (scheduler)", 
+					                i_ + 1, scheduler_.getZone());
+				}
 			}
 			else {
 				digitalWrite(RELAY_PINS[i_], RELAY_OFF);
+				// Log nur bei Statusänderung
+				if (previousState_ != RELAY_OFF) {
+					eventLogger.logf("Zone %d (%s) turned OFF (scheduler)", 
+					                i_ + 1, scheduler_.getZone());
+				}
 			}
 		}
-
 	}
 
 	if (ShouldReboot) {
-		Serial.println("Rebooting...");
-		delay(100);
+		eventLogger.log("Rebooting...");
+		delay(500);
 		ESP.restart();
 	}
-
 }

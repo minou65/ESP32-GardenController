@@ -1,4 +1,5 @@
 #include "SoilMoistureSensor.h"
+#include "EventLogger.h"
 
 #define MEASUREMENT_INTERVAL_MS (12UL * 60UL * 60UL * 1000UL)
 #define POWER_ON_DELAY_MS 1000
@@ -42,9 +43,9 @@ void SoilMoistureSensor::begin() {
     pinMode(_powerPin, OUTPUT);
     digitalWrite(_powerPin, LOW);
     pinMode(_analogPin, INPUT);
-
-    Serial.printf("Soil moisture sensor '%s' initialized (Pin: %d, Power: %d)\n", 
-        _NameValue, _analogPin, _powerPin);
+   
+    eventLogger.logf("Sensor '%s' initialized (Analog: %d, Power: %d)", 
+                     _NameValue, _analogPin, _powerPin);
 }
 
 const char* SoilMoistureSensor::getName() const {
@@ -69,7 +70,7 @@ bool SoilMoistureSensor::isEnabled() const {
 
 int SoilMoistureSensor::measureMoisture() {
     if (!isEnabled()) {
-        Serial.println("Sensor is disabled, skipping measurement");
+		eventLogger.logf("Sensor '%s' is disabled, skipping measurement", _NameValue);
         return -1;
     }
 
@@ -83,7 +84,16 @@ int SoilMoistureSensor::measureMoisture() {
     _lastRawValue = rawValue_;
     _lastMeasurementTime = millis();
 
-    Serial.printf("Soil moisture measured: %d (raw)\n", rawValue_);
+    int percent_ = getMoisturePercent();
+    
+   eventLogger.logf("Sensor '%s': %d%% (%d raw)", _NameValue, percent_, rawValue_);
+    
+    // Warnung wenn unter Schwellenwert
+    if (percent_ >= 0 && percent_ < getThreshold()) {
+        eventLogger.logf("WARNING: Sensor '%s' below threshold (%d%% < %d%%)", 
+                        _NameValue, percent_, getThreshold());
+    }
+    
     return rawValue_;
 }
 
