@@ -1,8 +1,10 @@
 #include "SoilMoistureSensor.h"
 #include "EventLogger.h"
 
-#define MEASUREMENT_INTERVAL_MS (12UL * 60UL * 60UL * 1000UL)
+#define MEASUREMENT_INTERVAL_MS (12UL * 60UL * 60UL * 1000UL) // 12 Stunden
 #define POWER_ON_DELAY_MS 1000
+#define STARTUP_STABILIZATION_MS 45000UL
+#define SENSOR_STAGGER_MS 1500UL
 
 SoilMoistureSensor::SoilMoistureSensor(const char* id, const char* label, int analogPin, int powerPin)
     : _id(id),
@@ -10,7 +12,8 @@ SoilMoistureSensor::SoilMoistureSensor(const char* id, const char* label, int an
     _analogPin(analogPin),
     _powerPin(powerPin),
     _lastRawValue(-1),
-    _lastMeasurementTime(0) {
+    _lastMeasurementTime(0),
+    _firstMeasurementNotBeforeMs(0) {
 
     snprintf(_NameValue, STRING_LEN, "Soil Sensor");
     snprintf(_MinValue, NUMBER_LEN, "0");
@@ -43,9 +46,17 @@ void SoilMoistureSensor::begin() {
     pinMode(_powerPin, OUTPUT);
     digitalWrite(_powerPin, LOW);
     pinMode(_analogPin, INPUT);
-   
-    eventLogger.logf("Sensor '%s' initialized (Analog: %d, Power: %d)", 
-                     _NameValue, _analogPin, _powerPin);
+
+#if defined(ESP32)
+    analogSetPinAttenuation(_analogPin, ADC_11db);
+#endif
+
+    unsigned long staggerMs_ = (static_cast<unsigned long>(_powerPin) % 10UL) * SENSOR_STAGGER_MS;
+    _firstMeasurementNotBeforeMs = millis() + STARTUP_STABILIZATION_MS + staggerMs_;
+
+    eventLogger.logf("Sensor '%s' initialized (Analog: %d, Power: %d, first measure in ~%lus)",
+        _NameValue, _analogPin, _powerPin,
+        (STARTUP_STABILIZATION_MS + staggerMs_) / 1000UL);
 }
 
 const char* SoilMoistureSensor::getName() const {
@@ -70,30 +81,59 @@ bool SoilMoistureSensor::isEnabled() const {
 
 int SoilMoistureSensor::measureMoisture() {
     if (!isEnabled()) {
-		eventLogger.logf("Sensor '%s' is disabled, skipping measurement", _NameValue);
+        eventLogger.logf("Sensor '%s' is disabled, skipping measurement", _NameValue);
         return -1;
     }
 
-    digitalWrite(_powerPin, HIGH);
-    delay(POWER_ON_DELAY_MS);
+    constexpr int DISCARD_READS = 3;
+    constexpr int SAMPLE_COUNT = 9;
+    constexpr int SAMPLE_DELAY_MS = 15;
 
-    int rawValue_ = analogRead(_analogPin);
+    digitalWrite(_powerPin, HIGH);
+    delay(300); // Settling
+
+    // Erste instabile Reads verwerfen
+    for (int i_ = 0; i_ < DISCARD_READS; ++i_) {
+        (void)analogRead(_analogPin);
+        delay(5);
+    }
+
+    int samples_[SAMPLE_COUNT];
+    for (int i_ = 0; i_ < SAMPLE_COUNT; ++i_) {
+        samples_[i_] = analogRead(_analogPin);
+        delay(SAMPLE_DELAY_MS);
+    }
 
     digitalWrite(_powerPin, LOW);
+
+    // Einfache Sortierung für Median
+    for (int i_ = 0; i_ < SAMPLE_COUNT - 1; ++i_) {
+        for (int j_ = i_ + 1; j_ < SAMPLE_COUNT; ++j_) {
+            if (samples_[j_] < samples_[i_]) {
+                int t_ = samples_[i_];
+                samples_[i_] = samples_[j_];
+                samples_[j_] = t_;
+            }
+        }
+    }
+
+    int rawValue_ = samples_[SAMPLE_COUNT / 2]; // Median
 
     _lastRawValue = rawValue_;
     _lastMeasurementTime = millis();
 
     int percent_ = getMoisturePercent();
-    
-   eventLogger.logf("Sensor '%s': %d%% (%d raw)", _NameValue, percent_, rawValue_);
-    
-    // Warnung wenn unter Schwellenwert
+    eventLogger.logf("Sensor '%s': %d%% (%d raw)", _NameValue, percent_, rawValue_);
+
     if (percent_ >= 0 && percent_ < getThreshold()) {
-        eventLogger.logf("WARNING: Sensor '%s' below threshold (%d%% < %d%%)", 
-                        _NameValue, percent_, getThreshold());
+        eventLogger.logf("WARNING: Sensor '%s' below threshold (%d%% < %d%%)",
+            _NameValue, percent_, getThreshold());
     }
-    
+    else if (percent_ >= 0) {
+        eventLogger.logf("OK: Sensor '%s' above threshold (%d%% >= %d%%)",
+            _NameValue, percent_, getThreshold());
+    }
+
     return rawValue_;
 }
 
@@ -104,12 +144,15 @@ int SoilMoistureSensor::getLastMoisture() const {
 int SoilMoistureSensor::getMoisturePercent() const {
     if (_lastRawValue < 0) return -1;
 
-    int min_ = getMinValue();
-    int max_ = getMaxValue();
+    // UI-Logik aktuell:
+    // Min = dry, Max = wet
+    int dry_ = getMinValue();
+    int wet_ = getMaxValue();
 
-    if (max_ <= min_) return 0;
+    // Nur identische Werte sind ungültig (Division durch 0 in map)
+    if (dry_ == wet_) return -1;
 
-    int percent_ = map(_lastRawValue, min_, max_, 0, 100);
+    int percent_ = map(_lastRawValue, dry_, wet_, 0, 100);
     return constrain(percent_, 0, 100);
 }
 
@@ -119,8 +162,10 @@ unsigned long SoilMoistureSensor::getLastMeasurementTime() const {
 
 bool SoilMoistureSensor::shouldMeasure() const {
     if (!isEnabled()) return false;
-    
-    if (_lastMeasurementTime == 0) return true;
+
+    if (_lastMeasurementTime == 0) {
+        return millis() >= _firstMeasurementNotBeforeMs;
+    }
 
     unsigned long elapsed_ = millis() - _lastMeasurementTime;
     return elapsed_ >= MEASUREMENT_INTERVAL_MS;

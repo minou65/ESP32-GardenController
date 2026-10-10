@@ -47,6 +47,7 @@ private:
     int _powerPin;
     int _lastRawValue;
     unsigned long _lastMeasurementTime;
+    unsigned long _firstMeasurementNotBeforeMs;
 
     char _NameValue[STRING_LEN] = { 0 };
     char _MinValue[NUMBER_LEN] = { 0 };
@@ -55,9 +56,9 @@ private:
     char _EnabledValue[STRING_LEN] = { 0 };
 
     char _NameId[STRING_LEN] = { 0 };
-    char _MinId[STRING_LEN] = { 0 };
-    char _MaxId[STRING_LEN] = { 0 };
-    char _ThresholdId[STRING_LEN] = { 0 };
+    char _MinId[NUMBER_LEN] = { 0 };
+    char _MaxId[NUMBER_LEN] = { 0 };
+    char _ThresholdId[NUMBER_LEN] = { 0 };
     char _EnabledId[STRING_LEN] = { 0 };
 
     iotwebconf::TextParameter _NameParam = iotwebconf::TextParameter("Name", _NameId, _NameValue, STRING_LEN);
