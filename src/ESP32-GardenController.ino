@@ -34,26 +34,26 @@ void setup() {
 		outputStatus[i_] = OUTPUT_AUTO;
 		manualOnTimestamp[i_] = 0;
 	}
-	eventLogger.log(String(MAX_SCHEDULERS) + " relay outputs initialized");
+	eventLogger.log(String(MAX_SCHEDULERS) + " relay outputs initialized", EventLogger::Status::OK);
 
 	for (int i_ = 0; i_ < MAX_SOIL_SENSORS; i_++) {
 		soilMoistureSensors[i_].begin();
 	}
-	eventLogger.log(String(MAX_SOIL_SENSORS) + " soil moisture sensors initialized");
+	eventLogger.log(String(MAX_SOIL_SENSORS) + " soil moisture sensors initialized", EventLogger::Status::OK);
 
 	eventLogger.log("Starting web server setup...");
 	setupWebServer();
 
 	eventLogger.log("Setting up NTP client...");
 	if (ntpConfig.useNtpServer()) {
-		eventLogger.logf("    NTP server: %s, Timezone: %s", ntpConfig.ntpServer().c_str(), ntpConfig.timeZone().c_str());
+		eventLogger.logf(EventLogger::Status::OK, "    NTP server: %s, Timezone: %s", ntpConfig.ntpServer().c_str(), ntpConfig.timeZone().c_str());
 		ntpClient.begin(ntpConfig.ntpServer(), ntpConfig.timeZone(), 0);
 	}
 	else {
-		eventLogger.log("    NTP disabled");
+		eventLogger.log("    NTP disabled", EventLogger::Status::WARN);
 	}
 	
-	eventLogger.log("Setup completed successfully");
+	eventLogger.log("Setup completed successfully", EventLogger::Status::OK);
 }
 
 void loop() {
@@ -65,10 +65,23 @@ void loop() {
 		}
 	}
 
-	// Soil moisture measurement every 12 hours
+	// Soil moisture measurement at configured interval
 	for (int i = 0; i < MAX_SOIL_SENSORS; i++) {
 		if (soilMoistureSensors[i].shouldMeasure()) {
-			soilMoistureSensors[i].measureMoisture();
+			eventLogger.logf(
+				"AUTO measurement triggered for sensor %d (%s)",
+				i + 1,
+				soilMoistureSensors[i].getName()
+			);
+
+			int rawValue_ = soilMoistureSensors[i].measureMoisture();
+			if (rawValue_ < 0) {
+				eventLogger.logf(EventLogger::Status::ERROR,
+					"AUTO measurement skipped/failed for sensor %d (%s)",
+					i + 1,
+					soilMoistureSensors[i].getName()
+				);
+			}
 		}
 	}
 
@@ -90,7 +103,7 @@ void loop() {
 					digitalWrite(RELAY_PINS[i_], RELAY_ON);
 					// Log nur bei Statusänderung
 					if (previousState_ != RELAY_ON) {
-						eventLogger.logf("Zone %d (%s) turned ON (manual)", 
+						eventLogger.logf(EventLogger::Status::OK, "Zone %d (%s) turned ON (manual)", 
 						                i_ + 1, scheduler_.getZone());
 					}
 					continue;
@@ -98,7 +111,7 @@ void loop() {
 					digitalWrite(RELAY_PINS[i_], RELAY_OFF);
 					// Log nur bei Statusänderung
 					if (previousState_ != RELAY_OFF) {
-						eventLogger.logf("Zone %d (%s) turned OFF (manual)", 
+						eventLogger.logf(EventLogger::Status::OK, "Zone %d (%s) turned OFF (manual)", 
 						                i_ + 1, scheduler_.getZone());
 					}
 					continue;
@@ -113,7 +126,7 @@ void loop() {
 				digitalWrite(RELAY_PINS[i_], RELAY_OFF);
 				// Log nur bei Statusänderung
 				if (previousState_ != RELAY_OFF) {
-					eventLogger.logf("Zone %d (%s) turned OFF (no valid time)", 
+					eventLogger.logf(EventLogger::Status::WARN, "Zone %d (%s) turned OFF (no valid time)", 
 					                i_ + 1, scheduler_.getZone());
 				}
 				continue;
@@ -135,7 +148,7 @@ void loop() {
 							digitalWrite(RELAY_PINS[i_], RELAY_OFF);
 							// Log nur bei Statusänderung
 							if (previousState_ != RELAY_OFF) {
-								eventLogger.logf("Zone %d (%s) turned OFF (moisture %d%% >= %d%%)", 
+								eventLogger.logf(EventLogger::Status::OK, "Zone %d (%s) turned OFF (moisture %d%% >= %d%%)", 
 								                i_ + 1, scheduler_.getZone(), 
 								                moisturePercent_, threshold_);
 							}
@@ -155,7 +168,7 @@ void loop() {
 				digitalWrite(RELAY_PINS[i_], RELAY_ON);
 				// Log nur bei Statusänderung
 				if (previousState_ != RELAY_ON) {
-					eventLogger.logf("Zone %d (%s) turned ON (scheduler)", 
+					eventLogger.logf(EventLogger::Status::OK, "Zone %d (%s) turned ON (scheduler)", 
 					                i_ + 1, scheduler_.getZone());
 				}
 			}
@@ -163,7 +176,7 @@ void loop() {
 				digitalWrite(RELAY_PINS[i_], RELAY_OFF);
 				// Log nur bei Statusänderung
 				if (previousState_ != RELAY_OFF) {
-					eventLogger.logf("Zone %d (%s) turned OFF (scheduler)", 
+					eventLogger.logf(EventLogger::Status::OK, "Zone %d (%s) turned OFF (scheduler)", 
 					                i_ + 1, scheduler_.getZone());
 				}
 			}
@@ -171,7 +184,7 @@ void loop() {
 	}
 
 	if (ShouldReboot) {
-		eventLogger.log("Rebooting...");
+		eventLogger.log("Rebooting...", EventLogger::Status::DEBUG);
 		delay(500);
 		ESP.restart();
 	}

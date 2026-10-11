@@ -597,7 +597,7 @@ void handleSSIDNotConfiguredPage(iotwebconf::WebRequestWrapper* webRequestWrappe
 }
 
 void handleConfigSaved() {
-	eventLogger.log("Configuration saved via WebConfig");
+	eventLogger.log("Configuration saved via WebConfig", EventLogger::Status::OK);
     ConfigChanged = true;
 }
 
@@ -612,7 +612,7 @@ void handleConnectWifi(const char* ssid, const char* password) {
 }
 
 iotwebconf::WifiAuthInfo* handleConnectWifiFailure() {
-	eventLogger.log(F("WiFi connection failed"));
+    eventLogger.log(String(F("WiFi connection failed")), EventLogger::Status::WARN);
 
     static iotwebconf::WifiAuthInfo auth_;
     auth_ = iotWebConf.getWifiAuthInfo();
@@ -620,11 +620,10 @@ iotwebconf::WifiAuthInfo* handleConnectWifiFailure() {
 }
 
 void handleWificonnected() {
-    eventLogger.logf("WiFi connected to %s", WiFi.SSID().c_str());
-    eventLogger.logf("IP address: %s", WiFi.localIP().toString().c_str());
     ArduinoOTA.begin();
-    
-    eventLogger.webPrintln("=== WiFi connected ===");
+
+    eventLogger.logf(EventLogger::Status::OK, "WiFi connected to %s", WiFi.SSID().c_str());
+    eventLogger.logf(EventLogger::Status::OK, "IP address: %s", WiFi.localIP().toString().c_str());
 }
 
 void handleWebCommand(const String& command) {
@@ -634,8 +633,6 @@ void handleWebCommand(const String& command) {
     if (command_.length() == 0) {
         return;
     }
-
-    eventLogger.logf("WebCommand: %s", command_.c_str());
 
     if (command_ == "help") {
         eventLogger.webPrintln("=== Available Commands ===");
@@ -648,7 +645,7 @@ void handleWebCommand(const String& command) {
     }
     else if (command_ == "reboot") {
         eventLogger.webPrintln(">>> Rebooting device...");
-        eventLogger.log("Reboot requested via Web UI");
+        eventLogger.log("Reboot requested via Web UI", EventLogger::Status::WARN);
         delay(100);
         ShouldReboot = true;
     }
@@ -744,6 +741,13 @@ void handleMeasure(AsyncWebServerRequest* request) {
         
         if (sensorId >= 0 && sensorId < MAX_SOIL_SENSORS) {
             if (soilMoistureSensors[sensorId].isEnabled()) {
+                eventLogger.logf(
+                    EventLogger::Status::DEBUG,
+                    "MANUAL measurement triggered for sensor %d (%s)",
+                    sensorId + 1,
+                    soilMoistureSensors[sensorId].getName()
+                );
+
                 int rawValue = soilMoistureSensors[sensorId].measureMoisture();
                 int percent = soilMoistureSensors[sensorId].getMoisturePercent();
                 
@@ -751,9 +755,14 @@ void handleMeasure(AsyncWebServerRequest* request) {
                 json += "\"sensor\":" + String(sensorId + 1) + ",";
                 json += "\"raw\":" + String(rawValue) + ",";
                 json += "\"percent\":" + String(percent);
-                
-                Serial.printf("Manual measurement: Sensor %d = %d%% (%d raw)\n", 
-                    sensorId + 1, percent, rawValue);
+
+                eventLogger.logf(
+                    EventLogger::Status::OK,
+                    "MANUAL measurement result sensor %d: %d%% (%d raw)",
+                    sensorId + 1,
+                    percent,
+                    rawValue
+                );
             } else {
                 json += "\"success\":false,";
                 json += "\"error\":\"Sensor is disabled\"";

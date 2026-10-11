@@ -1,7 +1,7 @@
 #include "SoilMoistureSensor.h"
 #include "EventLogger.h"
 
-#define MEASUREMENT_INTERVAL_MS (12UL * 60UL * 60UL * 1000UL) // 12 Stunden
+#define MEASUREMENT_INTERVAL_MS (1UL * 60UL * 60UL * 1000UL) // 1 Stunde
 #define POWER_ON_DELAY_MS 1000
 #define STARTUP_STABILIZATION_MS 45000UL
 #define SENSOR_STAGGER_MS 1500UL
@@ -81,7 +81,7 @@ bool SoilMoistureSensor::isEnabled() const {
 
 int SoilMoistureSensor::measureMoisture() {
     if (!isEnabled()) {
-        eventLogger.logf("Sensor '%s' is disabled, skipping measurement", _NameValue);
+        eventLogger.logf(EventLogger::Status::WARN, "Sensor '%s' is disabled, skipping measurement", _NameValue);
         return -1;
     }
 
@@ -123,14 +123,16 @@ int SoilMoistureSensor::measureMoisture() {
     _lastMeasurementTime = millis();
 
     int percent_ = getMoisturePercent();
-    eventLogger.logf("Sensor '%s': %d%% (%d raw)", _NameValue, percent_, rawValue_);
+    eventLogger.logf(EventLogger::Status::DEBUG, "Sensor '%s': %d%% (%d raw)", _NameValue, percent_, rawValue_);
 
     if (percent_ >= 0 && percent_ < getThreshold()) {
-        eventLogger.logf("WARNING: Sensor '%s' below threshold (%d%% < %d%%)",
+        eventLogger.logf(EventLogger::Status::WARN,
+            "Sensor '%s' below threshold (%d%% < %d%%)",
             _NameValue, percent_, getThreshold());
     }
     else if (percent_ >= 0) {
-        eventLogger.logf("OK: Sensor '%s' above threshold (%d%% >= %d%%)",
+        eventLogger.logf(EventLogger::Status::OK,
+            "Sensor '%s' above threshold (%d%% >= %d%%)",
             _NameValue, percent_, getThreshold());
     }
 
