@@ -9,11 +9,11 @@
 #include "Scheduler.h"
 #include "Neotimer.h"
 #include "version.h"
-#include "EventLogger.h"
-
 
 #include <Arduino.h>
 #include <NTPClient.h>
+#include <EventLogger.h>
+#include <RebootManager.h>
 
 char Version[] = VERSION_STR; // Manufacturer's Software version code
 
@@ -27,6 +27,14 @@ void setup() {
 	}
 
 	eventLogger.logf("ESP32 Gardena Controller Version: %s", Version);
+
+	// Load stored values, record the current reboot reason,
+	// and increment the reboot counter.
+	RebootManager::begin();
+
+	eventLogger.logf(EventLogger::Status::DEBUG, "Reboot reason: %s", RebootManager::getLastRebootReasonText().c_str());
+	eventLogger.logf(EventLogger::Status::DEBUG, "Reboot count: %d", RebootManager::getRebootCount());
+
 
 	for (int i_ = 0; i_ < MAX_SCHEDULERS; i_++) {
 		pinMode(RELAY_PINS[i_], OUTPUT);
