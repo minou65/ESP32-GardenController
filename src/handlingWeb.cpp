@@ -17,11 +17,6 @@
 #include <IotWebRootTab.h>
 #include <Preferences.h>
 
-// WebSerial High Performance Mode - sendet Nachrichten sofort
-#define WSL_HIGH_PERF
-#include <WebSerial.h>
-
-
 // -- Initial password to connect to the Thing, when it creates an own Access Point.
 const char wifiInitialApPassword[] = "123456789";
 
@@ -77,7 +72,7 @@ void handleConfigSavedPage(iotwebconf::WebRequestWrapper* webRequestWrapper);
 void handleConnectWifi(const char* ssid, const char* password);
 iotwebconf::WifiAuthInfo* handleConnectWifiFailure();
 void handleWificonnected();
-void handleWebSerialCommand(uint8_t* data, size_t len);
+void handleWebCommand(const String& command);
 void handleOnProgress(size_t prg, size_t sz);
 void handleReboot(AsyncWebServerRequest* request);
 void handleMeasure(AsyncWebServerRequest* request);
@@ -256,72 +251,30 @@ void setupWebServer() {
         handleMeasure(request);
     });
 
+    // EventLogger Web initialisieren
+    bool webOk_ = eventLogger.beginWeb(&server, "/events");
+    if (!webOk_) {
+        eventLogger.log("ERROR: EventLogger.beginWeb failed");
+    }
+
+    eventLogger.setCommandCallback([](const String& command_) {
+        handleWebCommand(command_);
+        });
+
     server.onNotFound([](AsyncWebServerRequest* request) {
         AsyncWebRequestWrapper asyncWebRequestWrapper_(request);
         iotWebConf.handleNotFound(&asyncWebRequestWrapper_);
-        }
-    );
-
-    // WebSerial Initialisierung
-    WebSerial.begin(&server, "/webserial");
-    
-    // Handler für eingehende Nachrichten
-    WebSerial.onMessage(handleWebSerialCommand);
-    
-    // Callback für Live-Updates registrieren
-    eventLogger.setLiveCallback([](const EventLogger::Event& event_) {
-        WebSerial.println(eventLogger.formatEvent(event_));
-        }
-    );
-    
-    eventLogger.log(F("WebSerial initialized on /webserial"));
+        });
 }
 
 void loopWebServer() {
     iotWebConf.doLoop();
-    
-    // WebSerial loop
-    WebSerial.loop();
-    
-    // Connection Count prüfen
-    int currentConnectionCount = WebSerial.getConnectionCount();
-    
-    // Verbindungsänderung erkannt
-    if (currentConnectionCount != previousConnectionCount) {
-        if (currentConnectionCount > 0) {
-            // Neue Verbindung
-            waitingToSendHistory = true;
-            lastConnectionChange = millis();
-        }
-        previousConnectionCount = currentConnectionCount;
-    }
-    
-    // Nach 500ms Historie senden
-    if (waitingToSendHistory && currentConnectionCount > 0 && (millis() - lastConnectionChange) >= 500) {
-        waitingToSendHistory = false;
-        
-        WebSerial.println();
-        WebSerial.println("=== Garden Controller WebSerial ===");
-        WebSerial.println("Type 'help' for available commands");
-        WebSerial.println();
-        
-        auto events_ = eventLogger.getEvents();
-        if (!events_.empty()) {
-            WebSerial.println("=== Event History (" + String(events_.size()) + " events) ===");
-            for (const auto& event_ : events_) {
-                WebSerial.println(eventLogger.formatEvent(event_));
-            }
-            WebSerial.println();
-        }
-        WebSerial.println("=== Live Events ===");
-        WebSerial.println();
-    }
+    eventLogger.loop();
 
     if (!ShouldReboot) {
         ShouldReboot = AsyncUpdater.isFinished();
     }
 }
-
 
 void handleRoot(AsyncWebServerRequest* request) {
     AsyncWebRequestWrapper asyncWebRequestWrapper(request);
@@ -486,7 +439,7 @@ void handleRoot(AsyncWebServerRequest* request) {
     response_->print(fp_.addNewLine(2));
     response_->print(fp_.getHtmlTable());
     response_->print(fp_.getHtmlTableRowText("Open <a href='/config'>configuration page</a>."));
-    response_->print(fp_.getHtmlTableRowText("Open <a href='/webserial' target='_blank'>WebSerial Console</a> for live logs."));
+    response_->print(fp_.getHtmlTableRowText("Open <a href='/events' target='_blank'>Live Events</a> for live logs."));
     response_->print(fp_.getHtmlTableRowText(fp_.getHtmlVersion(Version)));
     response_->print(fp_.getHtmlTableEnd());
 
@@ -671,95 +624,90 @@ void handleWificonnected() {
     eventLogger.logf("IP address: %s", WiFi.localIP().toString().c_str());
     ArduinoOTA.begin();
     
-    // Beim ersten Verbinden: Event-Buffer an WebSerial senden
-    auto events_ = eventLogger.getEvents();
-    for (const auto& event_ : events_) {
-        String formattedMsg_ = "[" + String(event_.timestamp / 1000) + "s] " + event_.message;
-        WebSerial.println(formattedMsg_);
-    }
+    eventLogger.webPrintln("=== WiFi connected ===");
 }
 
-void handleWebSerialCommand(uint8_t* data, size_t len) {
-    // Kommando in String umwandeln
-    String command_ = "";
-    for (size_t i_ = 0; i_ < len; i_++) {
-        command_ += (char)data[i_];
-    }
+void handleWebCommand(const String& command) {
+    String command_ = command;
     command_.trim();
-    
-    // Leere Kommandos ignorieren
+
     if (command_.length() == 0) {
         return;
     }
-    
-    eventLogger.logf("WebSerial: %s", command_.c_str());
-    
-    // Kommandos verarbeiten
+
+    eventLogger.logf("WebCommand: %s", command_.c_str());
+
     if (command_ == "help") {
-        WebSerial.println("=== Available Commands ===");
-        WebSerial.println("  help     - Show this help");
-        WebSerial.println("  reboot   - Reboot the device");
-        WebSerial.println("  clear    - Clear event buffer");
-        WebSerial.println("  status   - Show system status");
-        WebSerial.println("  history  - Show all buffered events");
-        WebSerial.println("  zones    - Show zone status");
+        eventLogger.webPrintln("=== Available Commands ===");
+        eventLogger.webPrintln("  help     - Show this help");
+        eventLogger.webPrintln("  reboot   - Reboot the device");
+        eventLogger.webPrintln("  clear    - Clear event buffer");
+        eventLogger.webPrintln("  status   - Show system status");
+        eventLogger.webPrintln("  history  - Show all buffered events");
+        eventLogger.webPrintln("  zones    - Show zone status");
     }
     else if (command_ == "reboot") {
-        WebSerial.println(">>> Rebooting device...");
-        eventLogger.log("Reboot requested via WebSerial");
+        eventLogger.webPrintln(">>> Rebooting device...");
+        eventLogger.log("Reboot requested via Web UI");
         delay(100);
         ShouldReboot = true;
     }
     else if (command_ == "clear") {
         eventLogger.clear();
-        WebSerial.println(">>> Event buffer cleared");
+        eventLogger.webPrintln(">>> Event buffer cleared");
     }
     else if (command_ == "status") {
-        WebSerial.println("=== System Status ===");
-        WebSerial.println("Version: " + String(Version));
-        WebSerial.println("WiFi SSID: " + String(WiFi.SSID()));
-        WebSerial.println("WiFi RSSI: " + String(WiFi.RSSI()) + " dBm");
-        WebSerial.println("IP Address: " + WiFi.localIP().toString());
-        
+        eventLogger.webPrintln("=== System Status ===");
+        eventLogger.webPrintln("Version: " + String(Version));
+        eventLogger.webPrintln("WiFi SSID: " + String(WiFi.SSID()));
+        eventLogger.webPrintln("WiFi RSSI: " + String(WiFi.RSSI()) + " dBm");
+        eventLogger.webPrintln("IP Address: " + WiFi.localIP().toString());
+
         unsigned long uptime_ = millis() / 1000;
         unsigned long days_ = uptime_ / 86400;
         unsigned long hours_ = (uptime_ % 86400) / 3600;
         unsigned long minutes_ = (uptime_ % 3600) / 60;
         unsigned long seconds_ = uptime_ % 60;
-        
-        WebSerial.printf("Uptime: %lud %02lu:%02lu:%02lu\n", days_, hours_, minutes_, seconds_);
-        WebSerial.println("Free Heap: " + String(ESP.getFreeHeap()) + " bytes");
-        WebSerial.println("Events in buffer: " + String(eventLogger.count()) + "/" + String(EVENT_BUFFER_SIZE));
+
+        char uptimeBuffer_[64];
+        snprintf(uptimeBuffer_, sizeof(uptimeBuffer_), "Uptime: %lud %02lu:%02lu:%02lu", days_, hours_, minutes_, seconds_);
+        eventLogger.webPrintln(String(uptimeBuffer_));
+
+        eventLogger.webPrintln("Free Heap: " + String(ESP.getFreeHeap()) + " bytes");
+        eventLogger.webPrintln("Events in buffer: " + String(eventLogger.count()) + "/" + String(EVENT_BUFFER_SIZE));
     }
     else if (command_ == "history") {
         auto events_ = eventLogger.getEvents();
-        WebSerial.println("=== Event History (" + String(events_.size()) + " events) ===");
+        eventLogger.webPrintln("=== Event History (" + String(events_.size()) + " events) ===");
         if (events_.empty()) {
-            WebSerial.println("(No events in buffer)");
-        } else {
+            eventLogger.webPrintln("(No events in buffer)");
+        }
+        else {
             for (const auto& event_ : events_) {
-                WebSerial.println(eventLogger.formatEvent(event_));
+                eventLogger.webPrintln(eventLogger.formatEvent(event_));
             }
         }
     }
     else if (command_ == "zones") {
-        WebSerial.println("=== Zone Status ===");
+        eventLogger.webPrintln("=== Zone Status ===");
         for (int i_ = 0; i_ < MAX_SCHEDULERS; i_++) {
             String status_ = "";
             switch (outputStatus[i_]) {
-                case OUTPUT_OFF: status_ = "OFF"; break;
-                case OUTPUT_ON: status_ = "ON"; break;
-                case OUTPUT_AUTO: status_ = "AUTO"; break;
+            case OUTPUT_OFF: status_ = "OFF"; break;
+            case OUTPUT_ON: status_ = "ON"; break;
+            case OUTPUT_AUTO: status_ = "AUTO"; break;
             }
-            WebSerial.printf("Zone %d: %s (Pin %d)\n", i_ + 1, status_.c_str(), RELAY_PINS[i_]);
+
+            char zoneBuffer_[64];
+            snprintf(zoneBuffer_, sizeof(zoneBuffer_), "Zone %d: %s (Pin %d)", i_ + 1, status_.c_str(), RELAY_PINS[i_]);
+            eventLogger.webPrintln(String(zoneBuffer_));
         }
     }
     else {
-        WebSerial.println(">>> Unknown command: " + command_);
-        WebSerial.println(">>> Type 'help' for available commands");
+        eventLogger.webPrintln(">>> Unknown command: " + command_);
+        eventLogger.webPrintln(">>> Type 'help' for available commands");
     }
 }
-
 void handleOnProgress(size_t prg, size_t sz) {
     static size_t lastPrinted_ = 0;
     size_t currentPercent_ = (prg * 100) / sz;
