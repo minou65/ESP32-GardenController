@@ -97,7 +97,7 @@ function requestData() {
 }
 
 function updateData(jsonData) {
-    document.getElementById('RSSIValue').innerHTML = jsonData.RSSI;
+    document.getElementById('RSSIValue').innerHTML = jsonData.RSSI + ' dBm';
 
     if (jsonData.valve) {
         for (let i = 1; i <= 8; i++) {
@@ -143,6 +143,16 @@ function setOutputButtonState(ch, state) {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
+  const isStandalone =
+    (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+    (window.navigator.standalone === true);
+
+  const eventsLink = document.getElementById('eventsLink');
+  if (eventsLink && isStandalone) {
+    eventsLink.removeAttribute('target');
+    eventsLink.removeAttribute('rel');
+  }
+
   document.querySelectorAll('.btn-group').forEach(group => {
     group.querySelectorAll('.output-btn').forEach(btn => {
       btn.addEventListener('click', function() {

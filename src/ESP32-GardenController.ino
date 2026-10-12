@@ -26,7 +26,7 @@ void setup() {
 		delay(1);
 	}
 
-	eventLogger.logf("ESP32 Gardena Controller Version: %s", Version);
+	eventLogger.logf("ESP32 Garden Controller Version: %s", Version);
 
 	// Load stored values, record the current reboot reason,
 	// and increment the reboot counter.

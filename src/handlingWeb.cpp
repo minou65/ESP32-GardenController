@@ -225,7 +225,7 @@ void setupWebServer() {
         }
     );
 
-    IconHandler::registerHandlers(&server, favicon_ico, sizeof(favicon_ico));
+    IconHandler::registerHandlers(&server, favicon_ico, sizeof(favicon_ico), favicon_ico, sizeof(favicon_ico));
 
     server.on("/reboot", HTTP_GET, [](AsyncWebServerRequest* request) {
 		handleReboot(request);
@@ -439,7 +439,7 @@ void handleRoot(AsyncWebServerRequest* request) {
     response_->print(fp_.addNewLine(2));
     response_->print(fp_.getHtmlTable());
     response_->print(fp_.getHtmlTableRowText("Open <a href='/config'>configuration page</a>."));
-    response_->print(fp_.getHtmlTableRowText("Open <a href='/events' target='_blank'>Live Events</a> for live logs."));
+    response_->print(fp_.getHtmlTableRowText("Open <a id='eventsLink' href='/events' target='_blank' rel='noopener'>Live Events</a> for live logs."));
     response_->print(fp_.getHtmlTableRowText(fp_.getHtmlVersion(Version)));
     response_->print(fp_.getHtmlTableEnd());
 
