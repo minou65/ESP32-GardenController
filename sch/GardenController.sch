@@ -517,20 +517,22 @@ Moisture</text>
 <wire x1="165.1" y1="129.54" x2="165.1" y2="91.44" width="0.1524" layer="91"/>
 </segment>
 </net>
-<net name="N$14" class="0">
+<net name="GRAU" class="0">
 <segment>
 <wire x1="175.26" y1="160.02" x2="185.42" y2="160.02" width="0.1524" layer="91"/>
 <wire x1="185.42" y1="160.02" x2="185.42" y2="116.84" width="0.1524" layer="91"/>
 <wire x1="185.42" y1="116.84" x2="160.02" y2="116.84" width="0.1524" layer="91"/>
 <wire x1="160.02" y1="116.84" x2="160.02" y2="91.44" width="0.1524" layer="91"/>
+<label x="185.42" y="132.08" size="1.778" layer="95" rot="R90"/>
 </segment>
 </net>
-<net name="N$15" class="0">
+<net name="GELB" class="0">
 <segment>
 <wire x1="170.18" y1="114.3" x2="170.18" y2="91.44" width="0.1524" layer="91"/>
 <wire x1="170.18" y1="114.3" x2="187.96" y2="114.3" width="0.1524" layer="91"/>
 <wire x1="187.96" y1="114.3" x2="187.96" y2="157.48" width="0.1524" layer="91"/>
 <wire x1="187.96" y1="157.48" x2="175.26" y2="157.48" width="0.1524" layer="91"/>
+<label x="187.96" y="132.08" size="1.778" layer="95" rot="R90"/>
 </segment>
 </net>
 <net name="N$16" class="0">
