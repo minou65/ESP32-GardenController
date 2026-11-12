@@ -127,6 +127,16 @@ function updateData(jsonData) {
             }
         }
     }
+
+    if (jsonData.runtime) {
+        for (let i = 1; i <= 8; i++) {
+            let runtimeValue = jsonData.runtime['zone' + i];
+            let runtimeSpan = document.getElementById('Zone' + i + 'Runtime');
+            if (runtimeSpan && runtimeValue) {
+                runtimeSpan.textContent = runtimeValue;
+            }
+        }
+    }
 }
 
 function setOutputButtonState(ch, state) {

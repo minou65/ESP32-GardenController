@@ -6,6 +6,7 @@
 #include "html.h"
 #include "favicon.h"
 #include "EventLogger.h"
+#include "RuntimeCounter.h"
 
 #include <Arduino.h>
 #include <ArduinoOTA.h>
@@ -171,7 +172,7 @@ void loadOutputStatus() {
 void setupWebServer() {
 
 	loadOutputStatus();
-
+	runtimeCounter.begin();
     iotWebConf.setStatusPin(STATUS_PIN, ON_LEVEL);
     iotWebConf.setConfigPin(CONFIG_PIN);
     
@@ -254,7 +255,7 @@ void setupWebServer() {
     // EventLogger Web initialisieren
     bool webOk_ = eventLogger.beginWeb(&server, "/events");
     if (!webOk_) {
-        eventLogger.log("ERROR: EventLogger.beginWeb failed");
+        eventLogger.log("EventLogger.beginWeb failed", EventLogger::Status::ERROR);
     }
 
     eventLogger.setCommandCallback([](const String& command_) {
@@ -270,6 +271,12 @@ void setupWebServer() {
 void loopWebServer() {
     iotWebConf.doLoop();
     eventLogger.loop();
+
+    bool relayState_[MAX_SCHEDULERS];
+    for (uint8_t i_ = 0; i_ < MAX_SCHEDULERS; i_++) {
+        relayState_[i_] = (digitalRead(RELAY_PINS[i_]) == RELAY_ON);
+    }
+    runtimeCounter.update(relayState_);
 
     if (!ShouldReboot) {
         ShouldReboot = AsyncUpdater.isFinished();
@@ -349,6 +356,24 @@ void handleRoot(AsyncWebServerRequest* request) {
         response_->print(F(":</td><td align=\"right\"><span id=\"Zone"));
         response_->print(String(i + 1));
         response_->print(F("Status\">OFF</span></td></tr>"));
+    }
+    response_->print(fp_.getHtmlTableEnd());
+    response_->print(fp_.getHtmlFieldsetEnd());
+
+    response_->print(fp_.getHtmlFieldset("Zone Runtime"));
+    response_->print(fp_.getHtmlTable());
+    for (uint8_t i_ = 0; i_ < MAX_SCHEDULERS; i_++) {
+        String zoneName_ = String(schedulers[i_].getZone());
+        if (zoneName_.length() == 0) {
+            zoneName_ = "Zone " + String(i_ + 1);
+        }
+        response_->print(F("<tr><td align=\"left\">"));
+        response_->print(zoneName_);
+        response_->print(F(":</td><td align=\"right\"><span id=\"Zone"));
+        response_->print(String(i_ + 1));
+        response_->print(F("Runtime\">"));
+        response_->print(runtimeCounter.getRuntimeString(i_));
+        response_->print(F("</span></td></tr>"));
     }
     response_->print(fp_.getHtmlTableEnd());
     response_->print(fp_.getHtmlFieldsetEnd());
@@ -508,8 +533,15 @@ void handleData(AsyncWebServerRequest* request) {
     }
     json_ += "}";
 
+    // Add runtime hours per zone
+    json_ += ",\"runtime\":{";
+    for (uint8_t i_ = 0; i_ < MAX_SCHEDULERS; i_++) {
+        if (i_ > 0) json_ += ",";
+        json_ += "\"zone" + String(i_ + 1) + "\":\"" + runtimeCounter.getRuntimeString(i_) + "\"";
+    }
     json_ += "}";
 
+    json_ += "}";
     request->send(200, "application/json", json_);
 }
 
@@ -524,6 +556,8 @@ void handlePost(AsyncWebServerRequest* request) {
             digitalWrite(RELAY_PINS[i_], RELAY_OFF);
             schedulers[i_].applyDefaultValue();
         }
+
+        runtimeCounter.resetAll();
         
         // Reset soil moisture sensors
         for (int i_ = 0; i_ < MAX_SOIL_SENSORS; i_++) {
