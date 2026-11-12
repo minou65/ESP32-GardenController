@@ -33,9 +33,6 @@ bld/
 [Ll]ogs/
 __vm/
 
-# Ignore backup copies of schematic files, but keep the original .sch files
-sch/*.s#*
-
 # Visual Studio 2015/2017 cache/options directory
 .vs/
 # Uncomment if you have tasks that create the project's static files in wwwroot
@@ -406,6 +403,24 @@ FodyWeavers.xsd
 .vscode/settings.json
 /img/Thumbs.db
 /src/Powerbox.ino.nodemcu-32s.bin
-*.txt
 doc/LED-Time-Control-TC420.pdf
 icon/icons8-aquarium-office-l-favicons/web/Thumbs.db
+
+
+# PlatformIO
+.pio/
+.piolibdeps/
+.clangd/
+
+# Lokale Python-Umgebungen (falls später verwendet)
+.venv/
+venv/
+
+# PlatformIO Coredumps
+coredump.*
+
+# Lokale Build-Artefakte
+*.elf
+*.map
+*.bin
+*.hex

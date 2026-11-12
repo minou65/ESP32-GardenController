@@ -13,6 +13,7 @@
 #include <Arduino.h>
 #include <NTPClient.h>
 #include <EventLogger.h>
+#include <HeapMonitor.h>
 #include <RebootManager.h>
 
 char Version[] = VERSION_STR; // Manufacturer's Software version code
@@ -27,6 +28,8 @@ void setup() {
 	}
 
 	eventLogger.logf("ESP32 Garden Controller Version: %s", Version);
+	beginHeapMonitor();
+	setHeapWarningThresholds(10000, 70); // Warnung bei <10kB freiem Heap oder >70% Fragmentierung
 
 	// Load stored values, record the current reboot reason,
 	// and increment the reboot counter.
@@ -54,11 +57,11 @@ void setup() {
 
 	eventLogger.log("Setting up NTP client...");
 	if (ntpConfig.useNtpServer()) {
-		eventLogger.logf(EventLogger::Status::OK, "    NTP server: %s, Timezone: %s", ntpConfig.ntpServer().c_str(), ntpConfig.timeZone().c_str());
+		eventLogger.logf(EventLogger::Status::OK, 1, "NTP server: %s, Timezone: %s", ntpConfig.ntpServer().c_str(), ntpConfig.timeZone().c_str());
 		ntpClient.begin(ntpConfig.ntpServer(), ntpConfig.timeZone(), 0);
 	}
 	else {
-		eventLogger.log("    NTP disabled", EventLogger::Status::WARN);
+		eventLogger.log("NTP disabled", EventLogger::Status::WARN, 1);
 	}
 	
 	eventLogger.log("Setup completed successfully", EventLogger::Status::OK);
@@ -66,6 +69,7 @@ void setup() {
 
 void loop() {
 	loopWebServer();
+	loopHeapMonitor();
 
 	if (iotWebConf.getState() == iotwebconf::OnLine) {
 		if (ntpClient.isInitialized()) {
@@ -103,13 +107,13 @@ void loop() {
 		for (int i_ = 0; i_ < MAX_SCHEDULERS; i_++) {
 			Scheduler& scheduler_ = schedulers[i_];
 			
-			// Aktuellen Pin-Status auslesen (VOR der ƒnderung)
+			// Aktuellen Pin-Status auslesen (VOR der √Ñnderung)
 			int previousState_ = digitalRead(RELAY_PINS[i_]);
 			
 			switch(outputStatus[i_]) {
 				case OUTPUT_ON:
 					digitalWrite(RELAY_PINS[i_], RELAY_ON);
-					// Log nur bei Status‰nderung
+					// Log nur bei Status√§nderung
 					if (previousState_ != RELAY_ON) {
 						eventLogger.logf(EventLogger::Status::OK, "Zone %d (%s) turned ON (manual)", 
 						                i_ + 1, scheduler_.getZone());
@@ -117,14 +121,14 @@ void loop() {
 					continue;
 				case OUTPUT_OFF:
 					digitalWrite(RELAY_PINS[i_], RELAY_OFF);
-					// Log nur bei Status‰nderung
+					// Log nur bei Status√§nderung
 					if (previousState_ != RELAY_OFF) {
 						eventLogger.logf(EventLogger::Status::OK, "Zone %d (%s) turned OFF (manual)", 
 						                i_ + 1, scheduler_.getZone());
 					}
 					continue;
 				case OUTPUT_AUTO:
-					// Automatikbetrieb, weiter unten pr¸fen
+					// Automatikbetrieb, weiter unten pr√ºfen
 					break;
 			}
 
@@ -132,7 +136,7 @@ void loop() {
 			// Without valid time, automatic irrigation is not allowed
 			if (!ntpClient.isValidTime()) {
 				digitalWrite(RELAY_PINS[i_], RELAY_OFF);
-				// Log nur bei Status‰nderung
+				// Log nur bei Status√§nderung
 				if (previousState_ != RELAY_OFF) {
 					eventLogger.logf(EventLogger::Status::WARN, "Zone %d (%s) turned OFF (no valid time)", 
 					                i_ + 1, scheduler_.getZone());
@@ -154,7 +158,7 @@ void loop() {
 						// -> DON'T water (continue)
 						if (moisturePercent_ >= threshold_) {
 							digitalWrite(RELAY_PINS[i_], RELAY_OFF);
-							// Log nur bei Status‰nderung
+							// Log nur bei Status√§nderung
 							if (previousState_ != RELAY_OFF) {
 								eventLogger.logf(EventLogger::Status::OK, "Zone %d (%s) turned OFF (moisture %d%% >= %d%%)", 
 								                i_ + 1, scheduler_.getZone(), 
@@ -174,7 +178,7 @@ void loop() {
 				scheduler_.isActiveOnDay(ntpClient.getDayOfWeek()) &&
 				scheduler_.isActiveAtTime(ntpClient.getMinutesSinceMidnight())) {
 				digitalWrite(RELAY_PINS[i_], RELAY_ON);
-				// Log nur bei Status‰nderung
+				// Log nur bei Status√§nderung
 				if (previousState_ != RELAY_ON) {
 					eventLogger.logf(EventLogger::Status::OK, "Zone %d (%s) turned ON (scheduler)", 
 					                i_ + 1, scheduler_.getZone());
@@ -182,7 +186,7 @@ void loop() {
 			}
 			else {
 				digitalWrite(RELAY_PINS[i_], RELAY_OFF);
-				// Log nur bei Status‰nderung
+				// Log nur bei Status√§nderung
 				if (previousState_ != RELAY_OFF) {
 					eventLogger.logf(EventLogger::Status::OK, "Zone %d (%s) turned OFF (scheduler)", 
 					                i_ + 1, scheduler_.getZone());
