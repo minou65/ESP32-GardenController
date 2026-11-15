@@ -4,17 +4,21 @@
  Author:	andy
 */
 
-#include "html.h"
-#include "handlingWeb.h"
-#include "Scheduler.h"
-#include "Neotimer.h"
-#include "version.h"
-
 #include <Arduino.h>
-#include <NTPClient.h>
+#include <IotWebConfAsync.h>
 #include <EventLogger.h>
 #include <HeapMonitor.h>
 #include <RebootManager.h>
+#include <NTPClient.h>
+#include <neotimer.h>
+#include <build_version.h>
+
+#include "html.h"
+#include "handlingWeb.h"
+#include "Scheduler.h"
+#include "SoilMoistureSensor.h"
+#include "NTPConfig.h"
+
 
 char Version[] = VERSION_STR; // Manufacturer's Software version code
 
@@ -55,16 +59,16 @@ void setup() {
 	eventLogger.log("Starting web server setup...");
 	setupWebServer();
 
-	eventLogger.log("Setting up NTP client...");
+	LOG_INFO("Setting up NTP client...");
 	if (ntpConfig.useNtpServer()) {
-		eventLogger.logf(EventLogger::Status::OK, 1, "NTP server: %s, Timezone: %s", ntpConfig.ntpServer().c_str(), ntpConfig.timeZone().c_str());
+		LOG_OK("NTP server: %s, Timezone: %s", ntpConfig.ntpServer().c_str(), ntpConfig.timeZone().c_str());
 		ntpClient.begin(ntpConfig.ntpServer(), ntpConfig.timeZone(), 0);
 	}
 	else {
-		eventLogger.log("NTP disabled", EventLogger::Status::WARN, 1);
+		LOG_WARN("NTP disabled");
 	}
 	
-	eventLogger.log("Setup completed successfully", EventLogger::Status::OK);
+	LOG_OK("Setup completed successfully");
 }
 
 void loop() {
