@@ -44,13 +44,12 @@ version_contents = (
 
 generated_include_dir = build_dir / "generated-version"
 generated_include_dir.mkdir(parents=True, exist_ok=True)
-generated_header = generated_include_dir / "aquarium_build_version.h"
+generated_header = generated_include_dir / "build_version.h"
 generated_header.write_text(
     version_contents,
     encoding="utf-8",
 )
 
-# The angle-bracket include lets this build-only header override src/version.h.
 # The source header stays unchanged until the firmware and post-build actions succeed.
 env.Prepend(CPPPATH=[str(generated_include_dir)])
 env["VERSION_HEADER_SOURCE"] = str(version_header)
