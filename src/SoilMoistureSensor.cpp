@@ -1,5 +1,5 @@
 #include "SoilMoistureSensor.h"
-#include "EventLogger.h"
+#include <EventLogger.h>
 
 #define MEASUREMENT_INTERVAL_MS (1UL * 60UL * 60UL * 1000UL) // 1 Stunde
 #define POWER_ON_DELAY_MS 1000
@@ -106,7 +106,7 @@ int SoilMoistureSensor::measureMoisture() {
 
     digitalWrite(_powerPin, LOW);
 
-    // Einfache Sortierung für Median
+    // Einfache Sortierung fï¿½r Median
     for (int i_ = 0; i_ < SAMPLE_COUNT - 1; ++i_) {
         for (int j_ = i_ + 1; j_ < SAMPLE_COUNT; ++j_) {
             if (samples_[j_] < samples_[i_]) {
@@ -151,7 +151,7 @@ int SoilMoistureSensor::getMoisturePercent() const {
     int dry_ = getMinValue();
     int wet_ = getMaxValue();
 
-    // Nur identische Werte sind ungültig (Division durch 0 in map)
+    // Nur identische Werte sind ungï¿½ltig (Division durch 0 in map)
     if (dry_ == wet_) return -1;
 
     int percent_ = map(_lastRawValue, dry_, wet_, 0, 100);

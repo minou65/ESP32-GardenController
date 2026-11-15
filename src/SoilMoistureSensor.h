@@ -7,7 +7,7 @@
 #include "WProgram.h"
 #endif
 
-#include <IotWebConf.h>
+#include <IotWebConfAsync.h>
 
 #define STRING_LEN 32
 #define NUMBER_LEN 5
@@ -15,12 +15,12 @@
 #define MAX_SOIL_SENSORS 2
 
 // Sensor 1 Pins
-#define SOIL_MOISTURE_PIN_1 36       // Analog Pin für Sensor 1
-#define SOIL_MOISTURE_POWER_PIN_1 13 // Power Pin für Sensor 1 (Relay 8)
+#define SOIL_MOISTURE_PIN_1 36       // Analog Pin for Sensor 1
+#define SOIL_MOISTURE_POWER_PIN_1 13 // Power Pin for Sensor 1 (Relay 8)
 
 // Sensor 2 Pins
-#define SOIL_MOISTURE_PIN_2 39       // Analog Pin für Sensor 2
-#define SOIL_MOISTURE_POWER_PIN_2 12 // Power Pin für Sensor 2 (Relay 7)
+#define SOIL_MOISTURE_PIN_2 39       // Analog Pin for Sensor 2
+#define SOIL_MOISTURE_POWER_PIN_2 12 // Power Pin for Sensor 2 (Relay 7)
 
 class SoilMoistureSensor : public iotwebconf::ParameterGroup {
 public:
