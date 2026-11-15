@@ -9,7 +9,7 @@
 	#include "WProgram.h"
 #endif
 
-#include <IotWebConf.h>
+#include <IotWebConfAsync.h>
 
 #define STRING_LEN 32
 #define NUMBER_LEN 5
