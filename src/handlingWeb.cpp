@@ -1,22 +1,21 @@
-// 
-// 
-// 
-
 #include "handlingWeb.h"
-#include "html.h"
-#include "favicon.h"
-#include "EventLogger.h"
-#include "RuntimeCounter.h"
+#include "NTPConfig.h"
+#include "SoilMoistureSensor.h"
 
 #include <Arduino.h>
 #include <ArduinoOTA.h>
 #include <WiFi.h>
 #include <DNSServer.h>
 
-#include <IotWebConfAsyncUpdateServer.h>
 #include <IotWebConfAsyncTab.h>
+#include <IotWebConfAsyncUpdateServer.h>
 #include <IotWebRootTab.h>
 #include <Preferences.h>
+
+#include "html.h"
+#include "favicon.h"
+#include "EventLogger.h"
+#include "RuntimeCounter.h"
 
 // -- Initial password to connect to the Thing, when it creates an own Access Point.
 const char wifiInitialApPassword[] = "123456789";
@@ -490,7 +489,7 @@ void handleDateTime(AsyncWebServerRequest* request) {
 }
 
 void handleData(AsyncWebServerRequest* request) {
-    // JSON mit aktuellen Werten für AJAX-Updates
+    // JSON mit aktuellen Werten fï¿½r AJAX-Updates
     String json_ = "{";
     json_ += "\"RSSI\":\"" + String(WiFi.RSSI()) + "\"";
 

@@ -9,11 +9,9 @@
 	#include "WProgram.h"
 #endif
 
-#include "Scheduler.h"
-#include "SoilMoistureSensor.h"
-#include "NTPConfig.h"
-
 #include <IotWebConfAsyncTab.h>
+
+#include "Scheduler.h"
 
 extern bool ShouldReboot;
 extern bool ConfigChanged;
